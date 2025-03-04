@@ -58,8 +58,8 @@ app.get("/auth/callback", async (req, res) => {
     // Store tokens in session
     req.session.tokens = tokens;
     
-    // Redirect back to original request or success page
-    const returnTo = req.session.returnTo || '/auth-success';
+    // Redirect with token as query parameter to ensure it's available
+    const returnTo = req.session.returnTo || `/auth-success?token=${encodeURIComponent(tokens.access_token)}`;
     req.session.returnTo = undefined;
     res.redirect(returnTo);
   } catch (error) {
@@ -67,9 +67,10 @@ app.get("/auth/callback", async (req, res) => {
   }
 });
 
-// Modify the existing success page handler to display token
+// Update success page to use query parameter if session token not available
 app.get("/auth-success", (req, res) => {
-  const token = req.session.tokens ? req.session.tokens.access_token : "No token available";
+  // Try to get token from query parameter first, then session
+  const token = req.query.token || (req.session.tokens ? req.session.tokens.access_token : "No token available");
   
   res.send(`
     <html>

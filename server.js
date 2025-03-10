@@ -2,13 +2,18 @@ const express = require("express");
 const { google } = require("googleapis");
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require('crypto');
+const crypto = require("node:crypto");
+
 require("dotenv").config();
+
+// Add these imports at the top of your file
+const { Pool } = require('pg');
+const session = require('express-session');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
-
 // File to store user tokens
 const USERS_FILE = path.join(__dirname, 'users.json');
 
@@ -345,23 +350,82 @@ app.get('/', (req, res) => {
           body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
           .button { background: #4285f4; color: white; border: none; padding: 10px 15px; 
                    border-radius: 5px; text-decoration: none; display: inline-block; margin-top: 20px; }
+          .button-secondary { background: #34a853; }
+          .options { display: flex; gap: 15px; margin-top: 20px; }
+          .option { border: 1px solid #ddd; padding: 15px; border-radius: 8px; flex: 1; }
+          h2 { margin-top: 0; }
         </style>
       </head>
       <body>
         <h1>GPT to Google Sheets Integration</h1>
         <p>This service allows GPTs to log conversations to Google Sheets.</p>
-        <p>To get started:</p>
-        <ol>
-          <li>Click the authentication button below</li>
-          <li>Complete the Google authentication process</li>
-          <li>You'll receive a User ID - provide this to your GPT when asked</li>
-          <li>The GPT will use this ID for all Google Sheets operations</li>
-        </ol>
-        <a href="/auth" class="button">Authenticate with Google</a>
+        
+        <div class="options">
+          <div class="option">
+            <h2>Standard Authentication</h2>
+            <p>Get a token ID that you'll need to provide to your GPT each time.</p>
+            <a href="/auth" class="button">Standard Auth</a>
+          </div>
+          
+          <div class="option">
+            <h2>Enhanced Authentication (SSO)</h2>
+            <p>Your browser remembers your authentication - no need to re-authenticate in future sessions.</p>
+            <a href="/auth/sso" class="button button-secondary">SSO Auth</a>
+          </div>
+        </div>
       </body>
     </html>
   `);
 });
+
+
+
+// Setup database connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Needed for Render.com PostgreSQL
+  }
+});
+
+// Initialize the database table
+const initDatabase = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auth_tokens (
+        user_id TEXT PRIMARY KEY,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        token_expiry TIMESTAMP NOT NULL,
+        email TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database:', error);
+  }
+};
+
+// Call initDatabase when the server starts
+initDatabase().catch(console.error);
+
+const app = express();
+app.use(express.json());
+app.use(express.static('public'));
+
+// Add these additional middleware
+app.use(cookieParser());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: true,
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+  }
+}));
 
 // Start Server
 const PORT = process.env.PORT || 3001;

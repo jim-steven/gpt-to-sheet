@@ -14,9 +14,40 @@ const cookieParser = require('cookie-parser');
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
+app.use(cookieParser());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: true,
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+  }
+}));
+
+app.get('/auth/check', async (req, res) => {
+  // Check for user ID in session or cookie
+  const userId = req.session.userId || req.cookies.gpt_sheet_user_id;
+  
+  if (!userId) {
+    return res.status(401).json({ authenticated: false });
+  }
+  
+  // Try to get tokens from database
+  const tokens = await getTokensFromDB(userId);
+  
+  if (!tokens) {
+    return res.status(401).json({ authenticated: false });
+  }
+  
+  return res.json({ 
+    authenticated: true,
+    userId: userId
+  });
+});
+
 // File to store user tokens
 const USERS_FILE = path.join(__dirname, 'users.json');
-
 // Helper function to read users data
 const readUsers = () => {
   try {
@@ -429,4 +460,56 @@ app.use(session({
 
 // Start Server
 const PORT = process.env.PORT || 3001;
+// Add a route to check authentication status for SSO users
+app.get('/auth/check', async (req, res) => {
+  // Check for user ID in session or cookie
+  const userId = req.session.userId || req.cookies.gpt_sheet_user_id;
+  
+  if (!userId) {
+    return res.status(401).json({ authenticated: false });
+  }
+  
+  // Try to get tokens from database
+  const tokens = await getTokensFromDB(userId);
+  
+  if (!tokens) {
+    return res.status(401).json({ authenticated: false });
+  }
+  
+  return res.json({ 
+    authenticated: true,
+    userId: userId
+  });
+});
+
+// Add this right after your pool definition, but before your routes
+const getTokensFromDB = async (userId) => {
+  try {
+    const result = await pool.query(
+      'SELECT access_token, refresh_token, token_expiry FROM auth_tokens WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+    
+    const { access_token, refresh_token, token_expiry } = result.rows[0];
+    
+    return {
+      access_token,
+      refresh_token,
+      expiry_date: new Date(token_expiry).getTime()
+    };
+  } catch (error) {
+    console.error('Error getting tokens from DB:', error);
+    return null;
+  }
+};
+
+// Add this simple test route
+app.get('/auth/test', (req, res) => {
+  res.json({ status: 'working' });
+});
+
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

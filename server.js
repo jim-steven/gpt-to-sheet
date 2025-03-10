@@ -25,6 +25,68 @@ app.use(session({
   }
 }));
 
+// Setup database connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Needed for Render.com PostgreSQL
+  }
+});
+
+// Initialize the database table
+const initDatabase = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auth_tokens (
+        user_id TEXT PRIMARY KEY,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        token_expiry TIMESTAMP NOT NULL,
+        email TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database:', error);
+  }
+};
+
+// Call initDatabase when the server starts
+initDatabase().catch(console.error);
+
+// Add this right after your pool definition, but before your routes
+const getTokensFromDB = async (userId) => {
+  try {
+    const result = await pool.query(
+      'SELECT access_token, refresh_token, token_expiry FROM auth_tokens WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+    
+    const { access_token, refresh_token, token_expiry } = result.rows[0];
+    
+    return {
+      access_token,
+      refresh_token,
+      expiry_date: new Date(token_expiry).getTime()
+    };
+  } catch (error) {
+    console.error('Error getting tokens from DB:', error);
+    return null;
+  }
+};
+
+// Add a simple test route
+app.get('/auth/test', (req, res) => {
+  res.json({ status: 'working' });
+});
+
+// Add a route to check authentication status
 app.get('/auth/check', async (req, res) => {
   // Check for user ID in session or cookie
   const userId = req.session.userId || req.cookies.gpt_sheet_user_id;
@@ -83,6 +145,29 @@ const generateUserId = () => {
   return crypto.randomBytes(16).toString('hex');
 };
 
+// Add these new database functions for token management
+const storeTokensInDB = async (userId, tokens) => {
+  const { access_token, refresh_token, expiry_date } = tokens;
+  
+  try {
+    await pool.query(
+      `INSERT INTO auth_tokens (user_id, access_token, refresh_token, token_expiry) 
+       VALUES ($1, $2, $3, to_timestamp($4/1000))
+       ON CONFLICT (user_id) 
+       DO UPDATE SET 
+         access_token = $2, 
+         refresh_token = CASE WHEN $3 = '' THEN auth_tokens.refresh_token ELSE $3 END,
+         token_expiry = to_timestamp($4/1000),
+         last_used = CURRENT_TIMESTAMP`,
+      [userId, access_token, refresh_token || '', expiry_date]
+    );
+    return true;
+  } catch (error) {
+    console.error('Error storing tokens in DB:', error);
+    return false;
+  }
+};
+
 // Step 1: Generate user ID and redirect to Google OAuth
 app.get("/auth", (req, res) => {
   const userId = generateUserId();
@@ -101,16 +186,55 @@ app.get("/auth", (req, res) => {
   res.redirect(authUrl);
 });
 
+// Add a new route for SSO authentication
+app.get("/auth/sso", (req, res) => {
+  const userId = generateUserId();
+  const oauth2Client = createOAuth2Client();
+  
+  // Store the user ID in the state parameter
+  const state = userId;
+  
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/userinfo.email"],
+    prompt: 'consent',
+    state: state // Pass user ID as state
+  });
+  
+  // Set a session variable to identify this as an SSO authentication
+  req.session.authType = 'sso';
+  
+  res.redirect(authUrl);
+});
+
 // Auth callback that stores tokens and returns user ID
 app.get("/auth/callback", async (req, res) => {
   const { code, state } = req.query;
   const userId = state; // Retrieve user ID from state
+  const isSSO = req.session.authType === 'sso';
   
   try {
     const oauth2Client = createOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
     
-    // Save tokens with user ID
+    // For SSO authentication, store tokens in the database and set a cookie
+    if (isSSO) {
+      // Store tokens in database for SSO
+      await storeTokensInDB(userId, tokens);
+      
+      // Store user ID in session
+      req.session.userId = userId;
+      
+      // Set a persistent cookie
+      res.cookie('gpt_sheet_user_id', userId, {
+        maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax'
+      });
+    }
+    
+    // Always save tokens with user ID (existing approach)
     const users = readUsers();
     users[userId] = {
       tokens: tokens,
@@ -119,7 +243,7 @@ app.get("/auth/callback", async (req, res) => {
     saveUsers(users);
     
     // Redirect to success page with user ID
-    res.redirect(`/auth-success?userId=${userId}`);
+    res.redirect(`/auth-success?userId=${userId}&sso=${isSSO ? 'true' : 'false'}`);
   } catch (error) {
     res.status(500).json({ error: "Authentication failed", details: error.message });
   }
@@ -128,6 +252,7 @@ app.get("/auth/callback", async (req, res) => {
 // Success page that displays the user ID
 app.get("/auth-success", (req, res) => {
   const userId = req.query.userId;
+  const isSSO = req.query.sso === 'true';
   
   res.send(`
     <html>
@@ -138,10 +263,11 @@ app.get("/auth-success", (req, res) => {
           .id-box { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; word-break: break-all; }
           button { background: #4285f4; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
           .success { color: green; display: none; margin-top: 10px; }
+          .badge { display: inline-block; background: #e4f1fe; color: #0074d9; font-size: 12px; padding: 3px 8px; border-radius: 12px; margin-left: 10px; }
         </style>
       </head>
       <body>
-        <h1>Authentication Successful</h1>
+        <h1>Authentication Successful ${isSSO ? '<span class="badge">SSO Enabled</span>' : ''}</h1>
         <p>You're now authenticated with Google Sheets!</p>
         <p>Your user ID:</p>
         <div class="id-box">
@@ -149,7 +275,10 @@ app.get("/auth-success", (req, res) => {
         </div>
         <button id="copy-btn">Copy User ID</button>
         <p class="success" id="success-msg">User ID copied to clipboard!</p>
-        <p>Important: Save this ID somewhere safe. You'll need it if you want to use this integration in a different conversation.</p>
+        ${isSSO ? 
+          '<p><strong>Enhanced Authentication:</strong> With SSO enabled, your browser will remember this connection. You should not need to re-authenticate in future sessions.</p>' : 
+          '<p>Important: Save this ID somewhere safe. You\'ll need it if you want to use this integration in a different conversation.</p>'
+        }
         <p>Return to your GPT conversation - it can now access your Google Sheets without requiring a token.</p>
         
         <script>
@@ -174,22 +303,38 @@ const getValidTokenForUser = async (userId) => {
     throw new Error("User ID is required");
   }
   
-  const users = readUsers();
-  const user = users[userId];
+  // First try to get from database (SSO method)
+  let tokens = await getTokensFromDB(userId);
   
-  if (!user || !user.tokens) {
-    throw new Error("User not found or not authenticated");
+  // If not found in database, try to get from file (traditional method)
+  if (!tokens) {
+    const users = readUsers();
+    const user = users[userId];
+    
+    if (!user || !user.tokens) {
+      throw new Error("User not found or not authenticated");
+    }
+    
+    tokens = user.tokens;
   }
   
   const oauth2Client = createOAuth2Client();
-  oauth2Client.setCredentials(user.tokens);
+  oauth2Client.setCredentials(tokens);
   
   // Check if token needs refresh
-  if (Date.now() >= user.tokens.expiry_date) {
+  if (Date.now() >= tokens.expiry_date) {
     try {
       const { credentials } = await oauth2Client.refreshAccessToken();
-      users[userId].tokens = credentials;
-      saveUsers(users);
+      
+      // Update tokens in both storage systems
+      const users = readUsers();
+      if (users[userId]) {
+        users[userId].tokens = credentials;
+        saveUsers(users);
+      }
+      
+      await storeTokensInDB(userId, credentials);
+      
       return credentials.access_token;
     } catch (error) {
       console.error("Token refresh error:", error);
@@ -197,7 +342,7 @@ const getValidTokenForUser = async (userId) => {
     }
   }
   
-  return user.tokens.access_token;
+  return tokens.access_token;
 };
 
 // Simplified endpoint to log data with userId
@@ -251,7 +396,6 @@ app.post("/api/get-sheet-data", async (req, res) => {
     oauth2Client.setCredentials({ access_token: token });
     
     const sheets = google.sheets({ version: "v4", auth: oauth2Client });
-    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: range || `${sheetName}!A:C`,
@@ -409,107 +553,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-
-
-// Setup database connection
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Needed for Render.com PostgreSQL
-  }
-});
-
-// Initialize the database table
-const initDatabase = async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS auth_tokens (
-        user_id TEXT PRIMARY KEY,
-        access_token TEXT NOT NULL,
-        refresh_token TEXT NOT NULL,
-        token_expiry TIMESTAMP NOT NULL,
-        email TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    console.log('Database initialized successfully');
-  } catch (error) {
-    console.error('Error initializing database:', error);
-  }
-};
-
-// Call initDatabase when the server starts
-initDatabase().catch(console.error);
-
-const app = express();
-app.use(express.json());
-app.use(express.static('public'));
-
-// Add these additional middleware
-app.use(cookieParser());
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key',
-  resave: false,
-  saveUninitialized: true,
-  cookie: { 
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
-  }
-}));
-
 // Start Server
 const PORT = process.env.PORT || 3001;
-// Add a route to check authentication status for SSO users
-app.get('/auth/check', async (req, res) => {
-  // Check for user ID in session or cookie
-  const userId = req.session.userId || req.cookies.gpt_sheet_user_id;
-  
-  if (!userId) {
-    return res.status(401).json({ authenticated: false });
-  }
-  
-  // Try to get tokens from database
-  const tokens = await getTokensFromDB(userId);
-  
-  if (!tokens) {
-    return res.status(401).json({ authenticated: false });
-  }
-  
-  return res.json({ 
-    authenticated: true,
-    userId: userId
-  });
-});
-
-// Add this right after your pool definition, but before your routes
-const getTokensFromDB = async (userId) => {
-  try {
-    const result = await pool.query(
-      'SELECT access_token, refresh_token, token_expiry FROM auth_tokens WHERE user_id = $1',
-      [userId]
-    );
-    
-    if (result.rows.length === 0) {
-      return null;
-    }
-    
-    const { access_token, refresh_token, token_expiry } = result.rows[0];
-    
-    return {
-      access_token,
-      refresh_token,
-      expiry_date: new Date(token_expiry).getTime()
-    };
-  } catch (error) {
-    console.error('Error getting tokens from DB:', error);
-    return null;
-  }
-};
-
-// Add this simple test route
-app.get('/auth/test', (req, res) => {
-  res.json({ status: 'working' });
-});
-
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

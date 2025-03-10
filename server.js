@@ -33,6 +33,16 @@ const pool = new Pool({
   }
 });
 
+// Add this near the top of your file
+const cors = require('cors');
+
+// Update your middleware setup
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+
 // Initialize the database table
 const initDatabase = async () => {
   try {
@@ -228,7 +238,7 @@ app.get("/auth/callback", async (req, res) => {
       // Set a persistent cookie
       res.cookie('gpt_sheet_user_id', userId, {
         maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
-        httpOnly: true,
+        httpOnly: false, // Allow JavaScript access
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
       });
@@ -246,6 +256,38 @@ app.get("/auth/callback", async (req, res) => {
     res.redirect(`/auth-success?userId=${userId}&sso=${isSSO ? 'true' : 'false'}`);
   } catch (error) {
     res.status(500).json({ error: "Authentication failed", details: error.message });
+  }
+});
+
+// Add these OAuth proxy routes to your server.js file
+
+// Proxy for Authorization URL
+app.get('/oauth/authorize', (req, res) => {
+  const params = new URLSearchParams(req.query);
+  params.set('access_type', 'offline');
+  params.set('prompt', 'consent');
+  
+  // Redirect to Google's OAuth endpoint
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
+  res.redirect(googleAuthUrl);
+});
+
+// Proxy for Token URL
+app.post('/oauth/token', async (req, res) => {
+  try {
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(req.body)
+    });
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Token exchange error:', error);
+    res.status(500).json({ error: 'Failed to exchange token' });
   }
 });
 

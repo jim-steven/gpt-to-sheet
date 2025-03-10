@@ -1,22 +1,34 @@
+// Imports - grouped by functionality
+// Core Node modules
 const express = require("express");
-const { google } = require("googleapis");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
-require("dotenv").config();
-
-// Add these imports at the top of your file
+// External dependencies
+const { google } = require("googleapis");
 const { Pool } = require('pg');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
+const cors = require('cors');
+const axios = require('axios');
 
+// Environment configuration
+require("dotenv").config();
+
+// Express app setup
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
 app.use(cookieParser());
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+// Session configuration
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  secret: process.env.SESSION_SECRET || 'default-secret-key',
   resave: false,
   saveUninitialized: true,
   cookie: { 
@@ -25,25 +37,17 @@ app.use(session({
   }
 }));
 
-// Setup database connection
+// Database connection setup
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false // Needed for Render.com PostgreSQL
   }
 });
+// Constants and file paths
+const USERS_FILE = path.join(__dirname, 'users.json');
 
-// Add this near the top of your file
-const cors = require('cors');
-
-// Update your middleware setup
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
-
-
-// Initialize the database table
+// Database initialization function
 const initDatabase = async () => {
   try {
     await pool.query(`
@@ -63,10 +67,10 @@ const initDatabase = async () => {
   }
 };
 
-// Call initDatabase when the server starts
+// Initialize database on startup
 initDatabase().catch(console.error);
 
-// Add this right after your pool definition, but before your routes
+// Helper function to get tokens from database
 const getTokensFromDB = async (userId) => {
   try {
     const result = await pool.query(
@@ -91,36 +95,7 @@ const getTokensFromDB = async (userId) => {
   }
 };
 
-// Add a simple test route
-app.get('/auth/test', (req, res) => {
-  res.json({ status: 'working' });
-});
-
-// Add a route to check authentication status
-app.get('/auth/check', async (req, res) => {
-  // Check for user ID in session or cookie
-  const userId = req.session.userId || req.cookies.gpt_sheet_user_id;
-  
-  if (!userId) {
-    return res.status(401).json({ authenticated: false });
-  }
-  
-  // Try to get tokens from database
-  const tokens = await getTokensFromDB(userId);
-  
-  if (!tokens) {
-    return res.status(401).json({ authenticated: false });
-  }
-  
-  return res.json({ 
-    authenticated: true,
-    userId: userId
-  });
-});
-
-// File to store user tokens
-const USERS_FILE = path.join(__dirname, 'users.json');
-// Helper function to read users data
+// Helper function to read users data from file
 const readUsers = () => {
   try {
     if (fs.existsSync(USERS_FILE)) {
@@ -132,7 +107,7 @@ const readUsers = () => {
   return {};
 };
 
-// Helper function to save users data
+// Helper function to save users data to file
 const saveUsers = (users) => {
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
@@ -141,7 +116,7 @@ const saveUsers = (users) => {
   }
 };
 
-// OAuth2 Client
+// Function to create OAuth2 client
 const createOAuth2Client = () => {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -154,122 +129,13 @@ const createOAuth2Client = () => {
 const generateUserId = () => {
   return crypto.randomBytes(16).toString('hex');
 };
-
-// Add these new database functions for token management
-const storeTokensInDB = async (userId, tokens) => {
-  const { access_token, refresh_token, expiry_date } = tokens;
-  
-  try {
-    await pool.query(
-      `INSERT INTO auth_tokens (user_id, access_token, refresh_token, token_expiry) 
-       VALUES ($1, $2, $3, to_timestamp($4/1000))
-       ON CONFLICT (user_id) 
-       DO UPDATE SET 
-         access_token = $2, 
-         refresh_token = CASE WHEN $3 = '' THEN auth_tokens.refresh_token ELSE $3 END,
-         token_expiry = to_timestamp($4/1000),
-         last_used = CURRENT_TIMESTAMP`,
-      [userId, access_token, refresh_token || '', expiry_date]
-    );
-    return true;
-  } catch (error) {
-    console.error('Error storing tokens in DB:', error);
-    return false;
-  }
-};
-
-// Step 1: Generate user ID and redirect to Google OAuth
-app.get("/auth", (req, res) => {
-  const userId = generateUserId();
-  const oauth2Client = createOAuth2Client();
-  
-  // Store the user ID in the state parameter
-  const state = userId;
-  
-  const authUrl = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: ["https://www.googleapis.com/auth/spreadsheets"],
-    prompt: 'consent',
-    state: state // Pass user ID as state
-  });
-  
-  res.redirect(authUrl);
-});
-
-// Add a new route for SSO authentication
-app.get("/auth/sso", (req, res) => {
-  const userId = generateUserId();
-  const oauth2Client = createOAuth2Client();
-  
-  // Store the user ID in the state parameter
-  const state = userId;
-  
-  const authUrl = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/userinfo.email"],
-    prompt: 'consent',
-    state: state // Pass user ID as state
-  });
-  
-  // Set a session variable to identify this as an SSO authentication
-  req.session.authType = 'sso';
-  
-  res.redirect(authUrl);
-});
-
-// Auth callback that stores tokens and returns user ID
-app.get("/auth/callback", async (req, res) => {
-  const { code, state } = req.query;
-  const userId = state; // Retrieve user ID from state
-  const isSSO = req.session.authType === 'sso';
-  
-  try {
-    const oauth2Client = createOAuth2Client();
-    const { tokens } = await oauth2Client.getToken(code);
-    
-    // For SSO authentication, store tokens in the database and set a cookie
-    if (isSSO) {
-      // Store tokens in database for SSO
-      await storeTokensInDB(userId, tokens);
-      
-      // Store user ID in session
-      req.session.userId = userId;
-      
-      // Set a persistent cookie
-      res.cookie('gpt_sheet_user_id', userId, {
-        maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
-        httpOnly: false, // Allow JavaScript access
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax'
-      });
-    }
-    
-    // Always save tokens with user ID (existing approach)
-    const users = readUsers();
-    users[userId] = {
-      tokens: tokens,
-      created: new Date().toISOString()
-    };
-    saveUsers(users);
-    
-    // Redirect to success page with user ID
-    res.redirect(`/auth-success?userId=${userId}&sso=${isSSO ? 'true' : 'false'}`);
-  } catch (error) {
-    res.status(500).json({ error: "Authentication failed", details: error.message });
-  }
-});
-
 // OAuth proxy endpoints for GPT integration
-const axios = require('axios'); // Make sure axios is installed
-
-// Proxy for Authorization URL
 app.get('/oauth/authorize', (req, res) => {
   const params = new URLSearchParams(req.query);
   const googleAuthUrl = `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
   res.redirect(googleAuthUrl);
 });
 
-// Proxy for Token URL
 app.post('/oauth/token', async (req, res) => {
   try {
     const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', req.body, {
@@ -293,43 +159,122 @@ app.post('/oauth/token', async (req, res) => {
   }
 });
 
-
-// Add these OAuth proxy routes to your server.js file
-
-// Proxy for Authorization URL
-app.get('/oauth/authorize', (req, res) => {
-  const params = new URLSearchParams(req.query);
-  params.set('access_type', 'offline');
-  params.set('prompt', 'consent');
+// Step 1: Generate user ID and redirect to Google OAuth
+app.get("/auth", (req, res) => {
+  const userId = generateUserId();
+  const oauth2Client = createOAuth2Client();
   
-  // Redirect to Google's OAuth endpoint
-  const googleAuthUrl = `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
-  res.redirect(googleAuthUrl);
+  // Store the user ID in the state parameter
+  const state = userId;
+  
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: ["https://www.googleapis.com/auth/spreadsheets"],
+    prompt: 'consent',
+    state: state // Pass user ID as state
+  });
+  
+  res.redirect(authUrl);
 });
 
-// Proxy for Token URL
-app.post('/oauth/token', async (req, res) => {
+// SSO authentication route
+app.get("/auth/sso", (req, res) => {
+  const userId = generateUserId();
+  const oauth2Client = createOAuth2Client();
+  
+  // Store the user ID in session for SSO flow
+  req.session.userId = userId;
+  
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: ["https://www.googleapis.com/auth/spreadsheets"],
+    prompt: 'consent',
+    state: userId
+  });
+  
+  res.redirect(authUrl);
+});
+
+// Auth callback that stores tokens and returns user ID
+app.get("/auth/callback", async (req, res) => {
+  const { code, state } = req.query;
+  const userId = state; // Retrieve user ID from state
+  
   try {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(req.body)
-    });
+    const oauth2Client = createOAuth2Client();
+    const { tokens } = await oauth2Client.getToken(code);
     
-    const data = await response.json();
-    res.json(data);
+    // Save tokens with user ID
+    const users = readUsers();
+    users[userId] = {
+      tokens: tokens,
+      created: new Date().toISOString()
+    };
+    saveUsers(users);
+    
+    // For SSO flow, store in session and cookie
+    if (req.session.userId === userId) {
+      // Set a persistent cookie
+      res.cookie('gpt_sheet_user_id', userId, {
+        maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
+        httpOnly: false, // Allow JavaScript access
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax'
+      });
+      
+      // Store tokens in database for SSO
+      try {
+        await pool.query(
+          'INSERT INTO auth_tokens(user_id, access_token, refresh_token, token_expiry) VALUES($1, $2, $3, $4) ' +
+          'ON CONFLICT (user_id) DO UPDATE SET access_token = $2, refresh_token = $3, token_expiry = $4, last_used = CURRENT_TIMESTAMP',
+          [
+            userId, 
+            tokens.access_token, 
+            tokens.refresh_token, 
+            new Date(tokens.expiry_date)
+          ]
+        );
+      } catch (dbError) {
+        console.error('Database error storing tokens:', dbError);
+      }
+    }
+    
+    // Redirect to success page with user ID
+    res.redirect(`/auth-success?userId=${userId}`);
   } catch (error) {
-    console.error('Token exchange error:', error);
-    res.status(500).json({ error: 'Failed to exchange token' });
+    res.status(500).json({ error: "Authentication failed", details: error.message });
   }
 });
 
+// Route to check authentication status for SSO users
+app.get('/auth/check', async (req, res) => {
+  // Check for user ID in session or cookie
+  const userId = req.session.userId || req.cookies.gpt_sheet_user_id;
+  
+  if (!userId) {
+    return res.status(401).json({ authenticated: false });
+  }
+  
+  // Try to get tokens from database
+  const tokens = await getTokensFromDB(userId);
+  
+  if (!tokens) {
+    return res.status(401).json({ authenticated: false });
+  }
+  
+  return res.json({ 
+    authenticated: true,
+    userId: userId
+  });
+});
+
+// Simple test route
+app.get('/auth/test', (req, res) => {
+  res.json({ status: 'working' });
+});
 // Success page that displays the user ID
 app.get("/auth-success", (req, res) => {
   const userId = req.query.userId;
-  const isSSO = req.query.sso === 'true';
   
   res.send(`
     <html>
@@ -340,11 +285,10 @@ app.get("/auth-success", (req, res) => {
           .id-box { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; word-break: break-all; }
           button { background: #4285f4; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
           .success { color: green; display: none; margin-top: 10px; }
-          .badge { display: inline-block; background: #e4f1fe; color: #0074d9; font-size: 12px; padding: 3px 8px; border-radius: 12px; margin-left: 10px; }
         </style>
       </head>
       <body>
-        <h1>Authentication Successful ${isSSO ? '<span class="badge">SSO Enabled</span>' : ''}</h1>
+        <h1>Authentication Successful</h1>
         <p>You're now authenticated with Google Sheets!</p>
         <p>Your user ID:</p>
         <div class="id-box">
@@ -352,10 +296,7 @@ app.get("/auth-success", (req, res) => {
         </div>
         <button id="copy-btn">Copy User ID</button>
         <p class="success" id="success-msg">User ID copied to clipboard!</p>
-        ${isSSO ? 
-          '<p><strong>Enhanced Authentication:</strong> With SSO enabled, your browser will remember this connection. You should not need to re-authenticate in future sessions.</p>' : 
-          '<p>Important: Save this ID somewhere safe. You\'ll need it if you want to use this integration in a different conversation.</p>'
-        }
+        <p>Important: Save this ID somewhere safe. You'll need it if you want to use this integration in a different conversation.</p>
         <p>Return to your GPT conversation - it can now access your Google Sheets without requiring a token.</p>
         
         <script>
@@ -380,10 +321,10 @@ const getValidTokenForUser = async (userId) => {
     throw new Error("User ID is required");
   }
   
-  // First try to get from database (SSO method)
+  // First try to get tokens from database (for SSO users)
   let tokens = await getTokensFromDB(userId);
   
-  // If not found in database, try to get from file (traditional method)
+  // If not found in database, try file storage
   if (!tokens) {
     const users = readUsers();
     const user = users[userId];
@@ -404,13 +345,22 @@ const getValidTokenForUser = async (userId) => {
       const { credentials } = await oauth2Client.refreshAccessToken();
       
       // Update tokens in both storage systems
+      // Update file storage
       const users = readUsers();
       if (users[userId]) {
         users[userId].tokens = credentials;
         saveUsers(users);
       }
       
-      await storeTokensInDB(userId, credentials);
+      // Update database
+      try {
+        await pool.query(
+          'UPDATE auth_tokens SET access_token = $1, refresh_token = $2, token_expiry = $3, last_used = CURRENT_TIMESTAMP WHERE user_id = $4',
+          [credentials.access_token, credentials.refresh_token, new Date(credentials.expiry_date), userId]
+        );
+      } catch (dbError) {
+        console.error('Database error updating tokens:', dbError);
+      }
       
       return credentials.access_token;
     } catch (error) {
@@ -421,18 +371,20 @@ const getValidTokenForUser = async (userId) => {
   
   return tokens.access_token;
 };
-
 // Simplified endpoint to log data with userId
 app.post("/api/log-data-v1", async (req, res) => {
   const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp, userId } = req.body;
   
-  if (!userId) {
+  // Get userId from request body or Authorization header if using OAuth
+  const authUserId = userId || req.get('Authorization')?.split(' ')[1];
+  
+  if (!authUserId) {
     return res.status(401).json({ error: "User ID is required" });
   }
   
   try {
     // Get a valid token for this user
-    const token = await getValidTokenForUser(userId);
+    const token = await getValidTokenForUser(authUserId);
     
     // Create OAuth client with the token
     const oauth2Client = createOAuth2Client();
@@ -445,7 +397,7 @@ app.post("/api/log-data-v1", async (req, res) => {
       range: `${sheetName}!A:C`,
       valueInputOption: "USER_ENTERED",
       requestBody: {
-        values: [[userMessage, assistantResponse, timestamp]],
+        values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
       },
     });
     
@@ -460,19 +412,23 @@ app.post("/api/log-data-v1", async (req, res) => {
 app.post("/api/get-sheet-data", async (req, res) => {
   const { spreadsheetId, sheetName, range, userId } = req.body;
   
-  if (!userId) {
+  // Get userId from request body or Authorization header if using OAuth
+  const authUserId = userId || req.get('Authorization')?.split(' ')[1];
+  
+  if (!authUserId) {
     return res.status(401).json({ error: "User ID is required" });
   }
   
   try {
     // Get a valid token for this user
-    const token = await getValidTokenForUser(userId);
+    const token = await getValidTokenForUser(authUserId);
     
     // Create OAuth client with the token
     const oauth2Client = createOAuth2Client();
     oauth2Client.setCredentials({ access_token: token });
     
     const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: range || `${sheetName}!A:C`,
@@ -484,19 +440,86 @@ app.post("/api/get-sheet-data", async (req, res) => {
     res.status(500).json({ error: "Failed to read from sheet", details: error.message });
   }
 });
-
 // OpenAPI specification with userId instead of token
 app.get('/openapi.json', (req, res) => {
-  res.json({
-    "openapi": "3.1.0",
+  // Serve a static OpenAPI specification
+  const openApiSpec = {
+    "openapi": "3.0.0",
     "info": {
       "title": "Chat Logger API",
       "description": "API for logging and retrieving chat conversations with Google Sheets",
-      "version": "1.0ותיקון"
+      "version": "1.0.0"
     },
     "servers": [
       {
         "url": "https://gpt-to-sheet.onrender.com"
+      }
+    ],
+    "components": {
+      "schemas": {
+        "LogRequest": {
+          "type": "object",
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Google Spreadsheet ID"
+            },
+            "sheetName": {
+              "type": "string",
+              "description": "Name of the sheet within the spreadsheet"
+            },
+            "userMessage": {
+              "type": "string",
+              "description": "Message from the user"
+            },
+            "assistantResponse": {
+              "type": "string",
+              "description": "Response from the assistant"
+            },
+            "timestamp": {
+              "type": "string",
+              "description": "ISO timestamp of the conversation"
+            }
+          },
+          "required": ["spreadsheetId", "sheetName", "userMessage", "assistantResponse"]
+        },
+        "SheetDataRequest": {
+          "type": "object",
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Google Spreadsheet ID"
+            },
+            "sheetName": {
+              "type": "string",
+              "description": "Name of the sheet within the spreadsheet"
+            },
+            "range": {
+              "type": "string",
+              "description": "Optional range in A1 notation (e.g. 'A1:C10')"
+            }
+          },
+          "required": ["spreadsheetId"]
+        }
+      },
+      "securitySchemes": {
+        "oauth2": {
+          "type": "oauth2",
+          "flows": {
+            "authorizationCode": {
+              "authorizationUrl": "https://gpt-to-sheet.onrender.com/oauth/authorize",
+              "tokenUrl": "https://gpt-to-sheet.onrender.com/oauth/token",
+              "scopes": {
+                "https://www.googleapis.com/auth/spreadsheets": "Read and write access to Google Sheets"
+              }
+            }
+          }
+        }
+      }
+    },
+    "security": [
+      {
+        "oauth2": ["https://www.googleapis.com/auth/spreadsheets"]
       }
     ],
     "paths": {
@@ -509,34 +532,7 @@ app.get('/openapi.json', (req, res) => {
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "spreadsheetId": {
-                      "type": "string", 
-                      "description": "Google Spreadsheet ID"
-                    },
-                    "sheetName": {
-                      "type": "string",
-                      "description": "Name of the sheet within the spreadsheet"
-                    },
-                    "userMessage": {
-                      "type": "string",
-                      "description": "Message from the user"
-                    },
-                    "assistantResponse": {
-                      "type": "string",
-                      "description": "Response from the assistant"
-                    },
-                    "timestamp": {
-                      "type": "string",
-                      "description": "ISO timestamp of the conversation"
-                    },
-                    "userId": {
-                      "type": "string",
-                      "description": "User ID from authentication"
-                    }
-                  },
-                  "required": ["spreadsheetId", "sheetName", "userMessage", "assistantResponse", "userId"]
+                  "$ref": "#/components/schemas/LogRequest"
                 }
               }
             }
@@ -557,26 +553,7 @@ app.get('/openapi.json', (req, res) => {
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "spreadsheetId": {
-                      "type": "string",
-                      "description": "Google Spreadsheet ID"
-                    },
-                    "sheetName": {
-                      "type": "string",
-                      "description": "Name of the sheet within the spreadsheet"
-                    },
-                    "range": {
-                      "type": "string", 
-                      "description": "Optional range in A1 notation (e.g. 'A1:C10')"
-                    },
-                    "userId": {
-                      "type": "string",
-                      "description": "User ID from authentication"
-                    }
-                  },
-                  "required": ["spreadsheetId", "userId"]
+                  "$ref": "#/components/schemas/SheetDataRequest"
                 }
               }
             }
@@ -589,7 +566,10 @@ app.get('/openapi.json', (req, res) => {
         }
       }
     }
-  });
+  };
+  
+  res.set('Content-Type', 'application/json');
+  res.json(openApiSpec);
 });
 
 // Root path route
@@ -629,7 +609,37 @@ app.get('/', (req, res) => {
     </html>
   `);
 });
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ 
+    error: "Server error", 
+    message: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : err.message 
+  });
+});
+
+// Catch-all route for undefined routes
+app.use((req, res) => {
+  res.status(404).json({ error: "Not found", message: "The requested resource does not exist" });
+});
 
 // Start Server
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  
+  // Log important URLs
+  console.log(`Auth URL: http://localhost:${PORT}/auth`);
+  console.log(`SSO Auth URL: http://localhost:${PORT}/auth/sso`);
+  console.log(`OpenAPI Spec: http://localhost:${PORT}/openapi.json`);
+  
+  if (process.env.NODE_ENV === 'production') {
+    console.log(`Production server running at: ${process.env.GOOGLE_REDIRECT_URI.split('/auth')[0]}`);
+  }
+});
+
+// Export app for testing
+module.exports = app;
+

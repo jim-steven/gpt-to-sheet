@@ -259,6 +259,41 @@ app.get("/auth/callback", async (req, res) => {
   }
 });
 
+// OAuth proxy endpoints for GPT integration
+const axios = require('axios'); // Make sure axios is installed
+
+// Proxy for Authorization URL
+app.get('/oauth/authorize', (req, res) => {
+  const params = new URLSearchParams(req.query);
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
+  res.redirect(googleAuthUrl);
+});
+
+// Proxy for Token URL
+app.post('/oauth/token', async (req, res) => {
+  try {
+    const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', req.body, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    // Format response in the way ChatGPT expects
+    const formattedResponse = {
+      access_token: tokenResponse.data.access_token,
+      token_type: tokenResponse.data.token_type || "bearer",
+      refresh_token: tokenResponse.data.refresh_token,
+      expires_in: tokenResponse.data.expires_in
+    };
+    
+    res.json(formattedResponse);
+  } catch (error) {
+    console.error('Token exchange error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to exchange token' });
+  }
+});
+
+
 // Add these OAuth proxy routes to your server.js file
 
 // Proxy for Authorization URL

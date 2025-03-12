@@ -19,6 +19,7 @@ require("dotenv").config();
 // Express app setup
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 app.use(cookieParser());
 app.use(cors({
@@ -145,31 +146,39 @@ app.get('/oauth/authorize', (req, res) => {
 
 app.post('/oauth/token', async (req, res) => {
   try {
+    console.log('Token exchange request headers:', req.headers);
     console.log('Token exchange request body:', req.body);
+    console.log('Token exchange request query:', req.query);
     
-    // Extract request parameters
+    // Support multiple input formats (JSON body, form data, query parameters)
+    let params = {};
+    
+    // Combine all possible sources of parameters
+    Object.assign(params, req.query || {});
+    Object.assign(params, req.body || {});
+    
+    // Check if content type is form-encoded and parse accordingly
+    const contentType = req.headers['content-type'] || '';
+    if (contentType.includes('application/x-www-form-urlencoded') && typeof req.body === 'string') {
+      const formParams = new URLSearchParams(req.body);
+      formParams.forEach((value, key) => {
+        params[key] = value;
+      });
+    }
+    
+    console.log('Combined parameters:', params);
+    
+    // Extract parameters from the combined sources
     const {
       grant_type,
       code,
       redirect_uri,
       client_id,
       client_secret
-    } = req.body;
+    } = params;
     
-    // Validate required parameters
-    if (!grant_type) {
-      return res.status(400).json({ error: 'grant_type is required' });
-    }
-    
-    // For authorization_code grant type
-    if (grant_type === 'authorization_code' && !code) {
-      return res.status(400).json({ error: 'code is required for authorization_code grant type' });
-    }
-    
-    // For refresh_token grant type
-    if (grant_type === 'refresh_token' && !req.body.refresh_token) {
-      return res.status(400).json({ error: 'refresh_token is required for refresh_token grant type' });
-    }
+    // Assume authorization_code if no grant_type specified (helps with ChatGPT integration)
+    const effectiveGrantType = grant_type || (code ? 'authorization_code' : 'refresh_token');
     
     // Create OAuth client
     const oauth2Client = new google.auth.OAuth2(
@@ -181,31 +190,41 @@ app.post('/oauth/token', async (req, res) => {
     let tokenResponse;
     
     // Handle different grant types
-    if (grant_type === 'authorization_code') {
+    if (effectiveGrantType === 'authorization_code') {
+      if (!code) {
+        return res.status(400).json({ error: 'code is required for authorization_code grant type' });
+      }
+      
       // Exchange authorization code for tokens
       tokenResponse = await oauth2Client.getToken(code);
-    } else if (grant_type === 'refresh_token') {
+      console.log('Got token response:', JSON.stringify(tokenResponse));
+    } else if (effectiveGrantType === 'refresh_token') {
+      if (!params.refresh_token) {
+        return res.status(400).json({ error: 'refresh_token is required for refresh_token grant type' });
+      }
+      
       // Refresh the tokens
       oauth2Client.setCredentials({
-        refresh_token: req.body.refresh_token
+        refresh_token: params.refresh_token
       });
       tokenResponse = await oauth2Client.refreshAccessToken();
     } else {
-      return res.status(400).json({ error: 'Invalid grant_type' });
+      return res.status(400).json({ error: 'Invalid or missing grant_type' });
     }
     
     // Format response properly for ChatGPT
     const formattedResponse = {
       access_token: tokenResponse.tokens.access_token,
       token_type: "bearer",
-      refresh_token: tokenResponse.tokens.refresh_token || req.body.refresh_token,
+      refresh_token: tokenResponse.tokens.refresh_token || params.refresh_token,
       expires_in: Math.floor((tokenResponse.tokens.expiry_date - Date.now()) / 1000)
     };
     
-    console.log('Token exchange successful');
+    console.log('Token exchange successful - formatted response:', formattedResponse);
     res.json(formattedResponse);
   } catch (error) {
-    console.error('Token exchange error:', error.response?.data || error.message);
+    console.error('Token exchange error:', error);
+    console.error('Error details:', error.response?.data || error.message);
     res.status(500).json({ 
       error: 'Failed to exchange token',
       details: error.message

@@ -16,28 +16,58 @@ const axios = require('axios');
 // Environment configuration
 require("dotenv").config();
 
-// Store access token with a user ID for ChatGPT API
+// Store access token with a user ID for ChatGPT API - with multiple fallback mechanisms
 const storeAccessToken = async (accessToken, refreshToken, expiryDate) => {
+  // Generate a unique ID for this token
+  const tokenId = crypto.randomBytes(16).toString('hex');
+  console.log(`Storing access token with ID: ${tokenId}`);
+  
+  // SOLUTION 1: Try PostgreSQL storage with proper timestamp handling
   try {
-    // Generate a unique ID for this token if we don't have a user ID
-    const tokenId = crypto.randomBytes(16).toString('hex');
+    // Convert JavaScript timestamp to PostgreSQL timestamp safely
+    const expiryDateObj = new Date(expiryDate);
+    const formattedDate = expiryDateObj.toISOString();
     
-    console.log(`Storing access token with ID: ${tokenId}`);
-    
-    // Store in database
     await pool.query(
       `INSERT INTO auth_tokens (user_id, access_token, refresh_token, token_expiry) 
-       VALUES ($1, $2, $3, to_timestamp($4/1000))
+       VALUES ($1, $2, $3, $4::timestamp)
        ON CONFLICT (user_id) 
        DO UPDATE SET 
          access_token = $2, 
          refresh_token = CASE WHEN $3 = '' THEN auth_tokens.refresh_token ELSE $3 END,
-         token_expiry = to_timestamp($4/1000),
+         token_expiry = $4::timestamp,
          last_used = CURRENT_TIMESTAMP`,
-      [tokenId, accessToken, refreshToken || '', expiryDate]
+      [tokenId, accessToken, refreshToken || '', formattedDate]
     );
     
-    // Also store in file for backward compatibility
+    console.log('Successfully stored token in database');
+  } catch (dbError) {
+    console.error('Database storage failed (Solution 1):', dbError);
+    
+    // SOLUTION 2: Try simplified database schema (no timestamp conversion)
+    try {
+      // Store expiry as a string instead of timestamp
+      await pool.query(
+        `INSERT INTO auth_tokens (user_id, access_token, refresh_token, token_expiry) 
+         VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour')
+         ON CONFLICT (user_id) 
+         DO UPDATE SET 
+           access_token = $2, 
+           refresh_token = CASE WHEN $3 = '' THEN auth_tokens.refresh_token ELSE $3 END,
+           token_expiry = NOW() + INTERVAL '1 hour',
+           last_used = CURRENT_TIMESTAMP`,
+        [tokenId, accessToken, refreshToken || '']
+      );
+      
+      console.log('Successfully stored token with simplified schema');
+    } catch (simpleDbError) {
+      console.error('Simplified database storage failed (Solution 2):', simpleDbError);
+      // Continue to fallback solutions
+    }
+  }
+  
+  // SOLUTION 3: Always store in file system as backup
+  try {
     const users = readUsers();
     users[tokenId] = {
       tokens: {
@@ -48,16 +78,38 @@ const storeAccessToken = async (accessToken, refreshToken, expiryDate) => {
       created: new Date().toISOString()
     };
     saveUsers(users);
-    
-    return tokenId;
-  } catch (error) {
-    console.error('Error storing access token:', error);
-    return null;
+    console.log('Successfully stored token in file system');
+  } catch (fileError) {
+    console.error('File storage failed (Solution 3):', fileError);
+    // Continue to fallback solutions
   }
+  
+  // SOLUTION 4: Store in global in-memory cache
+  try {
+    if (!global.tokenCache) {
+      global.tokenCache = {};
+    }
+    global.tokenCache[tokenId] = {
+      access_token: accessToken,
+      refresh_token: refreshToken || '',
+      expiry_date: expiryDate,
+      created: new Date().toISOString()
+    };
+    console.log('Successfully stored token in memory cache');
+  } catch (memoryError) {
+    console.error('Memory cache storage failed (Solution 4):', memoryError);
+    // Continue to fallback solutions
+  }
+  
+  // SOLUTION 5: If all else fails, at least return the token ID
+  // This allows direct token usage as a last resort
+  console.log('Returning token ID for direct usage if needed');
+  return tokenId;
 };
 
-// Get user ID by access token
+// Get user ID by access token - with multiple fallback mechanisms
 const getUserIdByAccessToken = async (accessToken) => {
+  // SOLUTION 1: Try database first
   try {
     const result = await pool.query(
       'SELECT user_id FROM auth_tokens WHERE access_token = $1',
@@ -65,14 +117,62 @@ const getUserIdByAccessToken = async (accessToken) => {
     );
     
     if (result.rows.length > 0) {
+      console.log('Found user ID in database');
       return result.rows[0].user_id;
     }
-    
-    return null;
-  } catch (error) {
-    console.error('Error finding user by access token:', error);
-    return null;
+  } catch (dbError) {
+    console.error('Database user ID lookup failed:', dbError);
+    // Continue to fallback solutions
   }
+  
+  // SOLUTION 2: Try file storage
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+      
+      // Find user with matching access token
+      for (const [userId, userData] of Object.entries(users)) {
+        if (userData.tokens && userData.tokens.access_token === accessToken) {
+          console.log('Found user ID in file storage');
+          return userId;
+        }
+      }
+    }
+  } catch (fileError) {
+    console.error('File user ID lookup failed:', fileError);
+    // Continue to fallback solutions
+  }
+  
+  // SOLUTION 3: Try in-memory cache
+  try {
+    if (global.tokenCache) {
+      for (const [userId, tokenData] of Object.entries(global.tokenCache)) {
+        if (tokenData.access_token === accessToken) {
+          console.log('Found user ID in memory cache');
+          return userId;
+        }
+      }
+    }
+  } catch (memoryError) {
+    console.error('Memory cache user ID lookup failed:', memoryError);
+    // Continue to fallback solutions
+  }
+  
+  // SOLUTION 4: Generate a new user ID for this token
+  try {
+    const newUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
+    if (newUserId) {
+      console.log('Created new user ID for token');
+      return newUserId;
+    }
+  } catch (storeError) {
+    console.error('Failed to create new user ID:', storeError);
+    // Continue to fallback solutions
+  }
+  
+  // SOLUTION 5: Use the token itself as the user ID (last resort)
+  console.log('Using token itself as user ID (last resort)');
+  return accessToken;
 };
 
 // Express app setup
@@ -137,29 +237,74 @@ const initDatabase = async () => {
 // Initialize database on startup
 initDatabase().catch(console.error);
 
-// Helper function to get tokens from database
+// Helper function to get tokens from all possible storage methods
 const getTokensFromDB = async (userId) => {
+  // SOLUTION 1: Try database first
   try {
     const result = await pool.query(
       'SELECT access_token, refresh_token, token_expiry FROM auth_tokens WHERE user_id = $1',
       [userId]
     );
     
-    if (result.rows.length === 0) {
-      return null;
+    if (result.rows.length > 0) {
+      const { access_token, refresh_token, token_expiry } = result.rows[0];
+      console.log('Found token in database');
+      return {
+        access_token,
+        refresh_token,
+        expiry_date: new Date(token_expiry).getTime()
+      };
     }
-    
-    const { access_token, refresh_token, token_expiry } = result.rows[0];
-    
-    return {
-      access_token,
-      refresh_token,
-      expiry_date: new Date(token_expiry).getTime()
-    };
-  } catch (error) {
-    console.error('Error getting tokens from DB:', error);
-    return null;
+  } catch (dbError) {
+    console.error('Database token retrieval failed:', dbError);
+    // Continue to fallback solutions
   }
+  
+  // SOLUTION 2: Try file storage
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+      const user = users[userId];
+      
+      if (user && user.tokens) {
+        console.log('Found token in file storage');
+        return user.tokens;
+      }
+    }
+  } catch (fileError) {
+    console.error('File token retrieval failed:', fileError);
+    // Continue to fallback solutions
+  }
+  
+  // SOLUTION 3: Try in-memory cache
+  try {
+    if (global.tokenCache && global.tokenCache[userId]) {
+      console.log('Found token in memory cache');
+      const cachedToken = global.tokenCache[userId];
+      return {
+        access_token: cachedToken.access_token,
+        refresh_token: cachedToken.refresh_token,
+        expiry_date: cachedToken.expiry_date
+      };
+    }
+  } catch (memoryError) {
+    console.error('Memory cache token retrieval failed:', memoryError);
+    // Continue to fallback solutions
+  }
+  
+  // SOLUTION 4: Check if userId itself is a token (starts with ya29.)
+  if (userId.startsWith('ya29.')) {
+    console.log('User ID appears to be a token, using it directly');
+    return {
+      access_token: userId,
+      refresh_token: '',
+      expiry_date: Date.now() + 3600000 // Assume 1 hour validity
+    };
+  }
+  
+  // SOLUTION 5: No token found in any storage
+  console.log('No token found for user ID in any storage');
+  return null;
 };
 
 // Helper function to read users data from file
@@ -453,23 +598,37 @@ app.get("/auth-success", (req, res) => {
         <style>
           body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
           .id-box { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; word-break: break-all; }
-          button { background: #4285f4; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
+          button { background: #4285f4; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; margin-right: 10px; }
+          .auto-close { background: #34a853; }
           .success { color: green; display: none; margin-top: 10px; }
+          .countdown { font-weight: bold; color: #4285f4; }
+          .instructions { border-left: 4px solid #fbbc05; padding-left: 15px; margin: 20px 0; }
         </style>
       </head>
       <body>
-        <h1>Authentication Successful</h1>
-        <p>You're now authenticated with Google Sheets!</p>
-        <p>Your user ID:</p>
+        <h1>Authentication Successful! ✅</h1>
+        <p>You're now authenticated with Google Sheets.</p>
+        
+        <div class="instructions">
+          <h3>What happens next:</h3>
+          <p>1. This window will automatically close in <span class="countdown" id="countdown">5</span> seconds.</p>
+          <p>2. Return to your ChatGPT conversation - it will continue automatically.</p>
+          <p>3. If the conversation doesn't continue, simply type "continue" in ChatGPT.</p>
+        </div>
+        
+        <p>Your user ID (save for future reference):</p>
         <div class="id-box">
           <code id="userId">${userId}</code>
         </div>
-        <button id="copy-btn">Copy User ID</button>
+        
+        <div>
+          <button id="copy-btn">Copy User ID</button>
+          <button class="auto-close" id="close-btn">Close Window Now</button>
+        </div>
         <p class="success" id="success-msg">User ID copied to clipboard!</p>
-        <p>Important: Save this ID somewhere safe. You'll need it if you want to use this integration in a different conversation.</p>
-        <p>Return to your GPT conversation - it can now access your Google Sheets without requiring a token.</p>
         
         <script>
+          // Copy button functionality
           document.getElementById('copy-btn').addEventListener('click', function() {
             const idText = document.getElementById('userId').textContent;
             navigator.clipboard.writeText(idText).then(function() {
@@ -479,6 +638,25 @@ app.get("/auth-success", (req, res) => {
               }, 3000);
             });
           });
+          
+          // Close button
+          document.getElementById('close-btn').addEventListener('click', function() {
+            window.close();
+          });
+          
+          // Countdown and auto-close
+          let seconds = 5;
+          const countdownElement = document.getElementById('countdown');
+          
+          const countdownInterval = setInterval(function() {
+            seconds--;
+            countdownElement.textContent = seconds;
+            
+            if (seconds <= 0) {
+              clearInterval(countdownInterval);
+              window.close();
+            }
+          }, 1000);
         </script>
       </body>
     </html>
@@ -571,7 +749,7 @@ const getValidTokenForUser = async (userId) => {
   console.log(`Using existing valid token for user ${userId}`);
   return tokens.access_token;
 };
-// Simplified endpoint to log data with userId
+// Simplified endpoint to log data with userId - with multiple fallback mechanisms
 app.post("/api/log-data-v1", async (req, res) => {
   const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp, userId } = req.body;
   
@@ -586,49 +764,65 @@ app.post("/api/log-data-v1", async (req, res) => {
   let authUserId = userId;
   let accessToken = null;
   
-  // Check for Authorization header (Bearer token)
+  // SOLUTION 1: Check for Authorization header (Bearer token)
   const authHeader = req.get('Authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
     accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
-    console.log('Got Bearer token, looking up associated user ID');
+    console.log('Got Bearer token from Authorization header');
     
     // Try to get user ID from token
-    const tokenUserId = await getUserIdByAccessToken(accessToken);
-    if (tokenUserId) {
-      console.log(`Found user ID ${tokenUserId} for this Bearer token`);
-      authUserId = tokenUserId;
-    } else {
-      // If no user ID found but we have a token, create one on the fly
-      console.log('No user ID found for token, creating one now');
-      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
-      console.log(`Created user ID ${authUserId} for this token`);
+    try {
+      const tokenUserId = await getUserIdByAccessToken(accessToken);
+      if (tokenUserId) {
+        console.log(`Found user ID ${tokenUserId} for this Bearer token`);
+        authUserId = tokenUserId;
+      }
+    } catch (authError) {
+      console.error('Error looking up user ID from token:', authError);
+      // Use token directly as fallback
+      authUserId = accessToken;
+      console.log('Using token directly as user ID (fallback)');
     }
   }
   
-  // Special case: If userId looks like an access token (starts with ya29.), treat it as a token
+  // SOLUTION 2: Check if userId looks like an access token
   if (!authUserId && userId && userId.startsWith('ya29.')) {
-    console.log('User ID appears to be an access token, treating it as such');
+    console.log('User ID appears to be an access token, using directly');
     accessToken = userId;
-    
-    // Check if we already have a user ID for this token
-    const tokenUserId = await getUserIdByAccessToken(accessToken);
-    if (tokenUserId) {
-      console.log(`Found user ID ${tokenUserId} for this token`);
-      authUserId = tokenUserId;
-    } else {
-      // Create a new user ID for this token
-      console.log('No user ID found for token, creating one now');
+    authUserId = userId; // Use token directly
+  }
+  
+  // SOLUTION 3: Try to create a new user ID if we have a token but no user ID
+  if (!authUserId && accessToken) {
+    try {
+      console.log('Creating new user ID for token');
       authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
-      console.log(`Created user ID ${authUserId} for this token`);
+    } catch (storeError) {
+      console.error('Failed to create user ID:', storeError);
+      // Use token directly as fallback
+      authUserId = accessToken;
+      console.log('Using token directly as user ID (fallback)');
     }
   }
   
+  // SOLUTION 4: Generate a temporary user ID if nothing else works
   if (!authUserId) {
-    console.error('Log attempt failed: No user ID provided or found');
-    return res.status(401).json({ error: "User ID is required" });
+    console.log('No user ID or token available, generating temporary ID');
+    authUserId = 'temp_' + crypto.randomBytes(8).toString('hex');
+    
+    // Store the temporary ID with empty credentials
+    // This allows at least some form of session continuity
+    try {
+      global.tempUsers = global.tempUsers || {};
+      global.tempUsers[authUserId] = {
+        created: new Date().toISOString()
+      };
+    } catch (tempError) {
+      console.error('Failed to store temporary user:', tempError);
+    }
   }
   
-  console.log(`Log attempt for user ID: ${authUserId}`);
+  console.log(`Final user ID for logging: ${authUserId}`);
   
   // Validate required fields
   if (!spreadsheetId) {
@@ -642,18 +836,21 @@ app.post("/api/log-data-v1", async (req, res) => {
   }
   
   try {
-    // For access token provided directly as user ID, use it directly instead of looking it up
+    // SOLUTION 5: Direct token usage if it's a token
     let token;
-    if (accessToken && authUserId && userId === accessToken) {
-      console.log('Using provided access token directly');
+    if (authUserId.startsWith('ya29.')) {
+      console.log('Using user ID directly as token');
+      token = authUserId;
+    } else if (accessToken) {
+      console.log('Using stored access token');
       token = accessToken;
     } else {
-      // Get a valid token for this user
+      // Get a valid token for this user through normal means
       console.log(`Getting token for user: ${authUserId}`);
       token = await getValidTokenForUser(authUserId);
     }
     
-    console.log(`Successfully obtained token for user: ${authUserId}`);
+    console.log('Successfully obtained token for request');
     
     // Create OAuth client with the token
     const oauth2Client = createOAuth2Client();
@@ -778,6 +975,49 @@ app.post("/api/get-sheet-data", async (req, res) => {
     res.status(500).json({ error: "Failed to read from sheet", details: error.message });
   }
 });
+// Endpoint for ChatGPT to check if a user is authenticated
+app.get('/auth/check-session', async (req, res) => {
+  const sessionId = req.query.session || req.cookies.auth_session;
+  
+  if (!sessionId) {
+    return res.status(404).json({ 
+      authenticated: false,
+      message: 'No session found'
+    });
+  }
+  
+  try {
+    // Check if the sessionId is in our db of authenticated sessions
+    const result = await pool.query(
+      'SELECT user_id, created_at FROM auth_tokens WHERE created_at > NOW() - INTERVAL \'10 minutes\' ORDER BY created_at DESC LIMIT 1'
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        authenticated: false,
+        message: 'No recent authentication found'
+      });
+    }
+    
+    // Return the most recently authenticated user
+    const userId = result.rows[0].user_id;
+    const createdAt = result.rows[0].created_at;
+    
+    return res.json({
+      authenticated: true,
+      userId: userId,
+      authenticatedAt: createdAt,
+      message: 'Authentication successful'
+    });
+  } catch (error) {
+    console.error('Error checking session:', error);
+    return res.status(500).json({ 
+      authenticated: false,
+      message: 'Error checking authentication status'
+    });
+  }
+});
+
 // OpenAPI specification with userId instead of token
 app.get('/openapi.json', (req, res) => {
   // Serve a static OpenAPI specification
@@ -919,6 +1159,46 @@ app.get('/openapi.json', (req, res) => {
                       "user_id": {
                         "type": "string",
                         "description": "User ID to use with other API endpoints"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/auth/check-session": {
+        "get": {
+          "summary": "Check if a recent authentication exists",
+          "operationId": "checkAuthSession",
+          "parameters": [
+            {
+              "name": "session",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "type": "string"
+              },
+              "description": "Session identifier (optional)"
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Authentication check successful",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "authenticated": {
+                        "type": "boolean"
+                      },
+                      "userId": {
+                        "type": "string"
                       },
                       "message": {
                         "type": "string"

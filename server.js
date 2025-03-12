@@ -22,8 +22,15 @@ app.use(express.json());
 app.use(express.static('public'));
 app.use(cookieParser());
 app.use(cors({
-  origin: true,
-  credentials: true
+  origin: [
+    'https://chat.openai.com',
+    'https://chatgpt.com',
+    'http://localhost:3000',
+    'https://gpt-to-sheet.onrender.com'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Session configuration
@@ -138,24 +145,71 @@ app.get('/oauth/authorize', (req, res) => {
 
 app.post('/oauth/token', async (req, res) => {
   try {
-    const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', req.body, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
+    console.log('Token exchange request body:', req.body);
     
-    // Format response in the way ChatGPT expects
+    // Extract request parameters
+    const {
+      grant_type,
+      code,
+      redirect_uri,
+      client_id,
+      client_secret
+    } = req.body;
+    
+    // Validate required parameters
+    if (!grant_type) {
+      return res.status(400).json({ error: 'grant_type is required' });
+    }
+    
+    // For authorization_code grant type
+    if (grant_type === 'authorization_code' && !code) {
+      return res.status(400).json({ error: 'code is required for authorization_code grant type' });
+    }
+    
+    // For refresh_token grant type
+    if (grant_type === 'refresh_token' && !req.body.refresh_token) {
+      return res.status(400).json({ error: 'refresh_token is required for refresh_token grant type' });
+    }
+    
+    // Create OAuth client
+    const oauth2Client = new google.auth.OAuth2(
+      client_id || process.env.GOOGLE_CLIENT_ID,
+      client_secret || process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri || process.env.GOOGLE_REDIRECT_URI
+    );
+    
+    let tokenResponse;
+    
+    // Handle different grant types
+    if (grant_type === 'authorization_code') {
+      // Exchange authorization code for tokens
+      tokenResponse = await oauth2Client.getToken(code);
+    } else if (grant_type === 'refresh_token') {
+      // Refresh the tokens
+      oauth2Client.setCredentials({
+        refresh_token: req.body.refresh_token
+      });
+      tokenResponse = await oauth2Client.refreshAccessToken();
+    } else {
+      return res.status(400).json({ error: 'Invalid grant_type' });
+    }
+    
+    // Format response properly for ChatGPT
     const formattedResponse = {
-      access_token: tokenResponse.data.access_token,
-      token_type: tokenResponse.data.token_type || "bearer",
-      refresh_token: tokenResponse.data.refresh_token,
-      expires_in: tokenResponse.data.expires_in
+      access_token: tokenResponse.tokens.access_token,
+      token_type: "bearer",
+      refresh_token: tokenResponse.tokens.refresh_token || req.body.refresh_token,
+      expires_in: Math.floor((tokenResponse.tokens.expiry_date - Date.now()) / 1000)
     };
     
+    console.log('Token exchange successful');
     res.json(formattedResponse);
   } catch (error) {
     console.error('Token exchange error:', error.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to exchange token' });
+    res.status(500).json({ 
+      error: 'Failed to exchange token',
+      details: error.message
+    });
   }
 });
 
@@ -444,7 +498,7 @@ app.post("/api/get-sheet-data", async (req, res) => {
 app.get('/openapi.json', (req, res) => {
   // Serve a static OpenAPI specification
   const openApiSpec = {
-    "openapi": "3.0.0",
+    "openapi": "3.1.0",
     "info": {
       "title": "Chat Logger API",
       "description": "API for logging and retrieving chat conversations with Google Sheets",

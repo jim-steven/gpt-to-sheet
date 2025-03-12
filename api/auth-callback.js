@@ -1,20 +1,46 @@
 const { google } = require("googleapis");
 require("dotenv").config();
+const { oauth2Client, storeTokens } = require('./auth');
+const express = require('express');
+const router = express.Router();
 
-module.exports = async (req, res) => {
+router.get('/', async (req, res) => {
   const { code } = req.query;
   
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-  );
+  if (!code) {
+    return res.status(400).json({ error: 'Authorization code is missing' });
+  }
 
   try {
     const { tokens } = await oauth2Client.getToken(code);
-    // Redirect to a success page with the access token
-    res.redirect(`/api/auth-success?token=${encodeURIComponent(tokens.access_token)}`);
+    oauth2Client.setCredentials(tokens);
+
+    // Get user info to use as userId
+    const oauth2 = google.oauth2('v2');
+    const userInfo = await oauth2.userinfo.get({ auth: oauth2Client });
+    const userId = userInfo.data.email;
+
+    await storeTokens(userId, tokens);
+
+    // Check if this is a ChatGPT plugin callback
+    const referer = req.get('Referer') || '';
+    if (referer.includes('chat.openai.com') || referer.includes('chatgpt.com')) {
+      // Return JSON response for ChatGPT plugin
+      return res.json({ 
+        success: true, 
+        userId: userId
+      });
+    }
+
+    // Regular web application flow
+    res.redirect('/auth/success');
   } catch (error) {
-    res.status(500).json({ error: "Authentication failed" });
+    console.error('Token exchange error:', error);
+    res.status(500).json({ 
+      error: 'Failed to exchange token',
+      details: error.message
+    });
   }
-};
+});
+
+module.exports = router;

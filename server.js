@@ -391,31 +391,52 @@ app.get("/auth-success", (req, res) => {
 // Helper function to get valid token for a user
 const getValidTokenForUser = async (userId) => {
   if (!userId) {
+    console.error("User ID is missing!");
     throw new Error("User ID is required");
   }
   
+  console.log(`Attempting to get token for user: ${userId}`);
+  
   // First try to get tokens from database (for SSO users)
   let tokens = await getTokensFromDB(userId);
+  console.log(`Database tokens for ${userId}:`, tokens ? "Found" : "Not found");
   
   // If not found in database, try file storage
   if (!tokens) {
+    console.log(`Looking for user ${userId} in file storage...`);
     const users = readUsers();
     const user = users[userId];
     
     if (!user || !user.tokens) {
+      console.error(`User ${userId} not found in file storage either!`);
       throw new Error("User not found or not authenticated");
     }
     
+    console.log(`Found user ${userId} in file storage!`);
     tokens = user.tokens;
+  }
+  
+  // Check if we have the required token fields
+  if (!tokens.access_token) {
+    console.error(`Missing access_token for user ${userId}`);
+    throw new Error("Invalid token: missing access_token");
   }
   
   const oauth2Client = createOAuth2Client();
   oauth2Client.setCredentials(tokens);
   
   // Check if token needs refresh
-  if (Date.now() >= tokens.expiry_date) {
+  if (!tokens.expiry_date || Date.now() >= tokens.expiry_date) {
+    console.log(`Token expired for user ${userId}, attempting refresh...`);
     try {
+      // Only try to refresh if we have a refresh token
+      if (!tokens.refresh_token) {
+        console.error(`No refresh_token available for user ${userId}`);
+        throw new Error("Cannot refresh: missing refresh_token");
+      }
+      
       const { credentials } = await oauth2Client.refreshAccessToken();
+      console.log(`Successfully refreshed token for user ${userId}`);
       
       // Update tokens in both storage systems
       // Update file storage
@@ -423,6 +444,7 @@ const getValidTokenForUser = async (userId) => {
       if (users[userId]) {
         users[userId].tokens = credentials;
         saveUsers(users);
+        console.log(`Updated file storage tokens for user ${userId}`);
       }
       
       // Update database
@@ -431,53 +453,148 @@ const getValidTokenForUser = async (userId) => {
           'UPDATE auth_tokens SET access_token = $1, refresh_token = $2, token_expiry = $3, last_used = CURRENT_TIMESTAMP WHERE user_id = $4',
           [credentials.access_token, credentials.refresh_token, new Date(credentials.expiry_date), userId]
         );
+        console.log(`Updated database tokens for user ${userId}`);
       } catch (dbError) {
-        console.error('Database error updating tokens:', dbError);
+        console.error(`Database error updating tokens for user ${userId}:`, dbError);
       }
       
       return credentials.access_token;
     } catch (error) {
-      console.error("Token refresh error:", error);
-      throw new Error("Failed to refresh token");
+      console.error(`Token refresh error for user ${userId}:`, error);
+      throw new Error(`Failed to refresh token: ${error.message}`);
     }
   }
   
+  console.log(`Using existing valid token for user ${userId}`);
   return tokens.access_token;
 };
 // Simplified endpoint to log data with userId
 app.post("/api/log-data-v1", async (req, res) => {
   const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp, userId } = req.body;
   
+  console.log('Logging request received:', {
+    spreadsheetId,
+    sheetName,
+    userId,
+    messageLength: userMessage?.length,
+    responseLength: assistantResponse?.length
+  });
+  
   // Get userId from request body or Authorization header if using OAuth
   const authUserId = userId || req.get('Authorization')?.split(' ')[1];
   
   if (!authUserId) {
+    console.error('Log attempt failed: No user ID provided');
     return res.status(401).json({ error: "User ID is required" });
+  }
+  
+  console.log(`Log attempt for user ID: ${authUserId}`);
+  
+  // Validate required fields
+  if (!spreadsheetId) {
+    console.error('Log attempt failed: No spreadsheetId provided');
+    return res.status(400).json({ error: "spreadsheetId is required" });
+  }
+  
+  if (!userMessage || !assistantResponse) {
+    console.error('Log attempt failed: Missing message content');
+    return res.status(400).json({ error: "userMessage and assistantResponse are required" });
   }
   
   try {
     // Get a valid token for this user
+    console.log(`Getting token for user: ${authUserId}`);
     const token = await getValidTokenForUser(authUserId);
+    console.log(`Successfully obtained token for user: ${authUserId}`);
     
     // Create OAuth client with the token
     const oauth2Client = createOAuth2Client();
     oauth2Client.setCredentials({ access_token: token });
     
     const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+    const actualSheetName = sheetName || "Data"; // Default to "Data" if not specified
     
+    console.log(`Writing to sheet "${actualSheetName}" in spreadsheet "${spreadsheetId}"`);
+    
+    // First check if the sheet exists, create it if it doesn't
+    try {
+      // Try to get the sheet info
+      await sheets.spreadsheets.get({
+        spreadsheetId,
+        ranges: [`${actualSheetName}!A1`]
+      });
+      console.log(`Sheet "${actualSheetName}" exists`);
+    } catch (sheetError) {
+      if (sheetError.code === 404 || sheetError.message.includes('not found')) {
+        // Sheet doesn't exist, create it
+        console.log(`Sheet "${actualSheetName}" doesn't exist, creating it`);
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          resource: {
+            requests: [{
+              addSheet: {
+                properties: {
+                  title: actualSheetName
+                }
+              }
+            }]
+          }
+        });
+        
+        // Add headers
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${actualSheetName}!A1:C1`,
+          valueInputOption: "USER_ENTERED",
+          resource: {
+            values: [["User Message", "Assistant Response", "Timestamp"]]
+          }
+        });
+        console.log(`Created sheet "${actualSheetName}" with headers`);
+      } else {
+        // Some other error with the sheet
+        throw sheetError;
+      }
+    }
+    
+    // Now append the data
     const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:C`,
+      range: `${actualSheetName}!A:C`,
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
       },
     });
     
+    console.log('Data logged successfully!');
     res.json({ message: "Data logged successfully!", response: response.data });
   } catch (error) {
     console.error("Logging error:", error);
-    res.status(500).json({ error: "Failed to write to sheet", details: error.message });
+    
+    // Provide a more specific error message based on the error type
+    let errorMessage = "Failed to write to sheet";
+    let statusCode = 500;
+    
+    if (error.message.includes('User not found')) {
+      errorMessage = "User not found or not authenticated";
+      statusCode = 401;
+    } else if (error.message.includes('invalid_grant')) {
+      errorMessage = "Authentication expired, please re-authenticate";
+      statusCode = 401;
+    } else if (error.code === 403 || error.message.includes('permission')) {
+      errorMessage = "Permission denied to access the spreadsheet";
+      statusCode = 403;
+    } else if (error.code === 404 || error.message.includes('not found')) {
+      errorMessage = "Spreadsheet not found";
+      statusCode = 404;
+    }
+    
+    res.status(statusCode).json({ 
+      error: errorMessage, 
+      details: error.message,
+      code: error.code || 'UNKNOWN'
+    });
   }
 });
 

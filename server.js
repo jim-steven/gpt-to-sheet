@@ -16,6 +16,65 @@ const axios = require('axios');
 // Environment configuration
 require("dotenv").config();
 
+// Store access token with a user ID for ChatGPT API
+const storeAccessToken = async (accessToken, refreshToken, expiryDate) => {
+  try {
+    // Generate a unique ID for this token if we don't have a user ID
+    const tokenId = crypto.randomBytes(16).toString('hex');
+    
+    console.log(`Storing access token with ID: ${tokenId}`);
+    
+    // Store in database
+    await pool.query(
+      `INSERT INTO auth_tokens (user_id, access_token, refresh_token, token_expiry) 
+       VALUES ($1, $2, $3, to_timestamp($4/1000))
+       ON CONFLICT (user_id) 
+       DO UPDATE SET 
+         access_token = $2, 
+         refresh_token = CASE WHEN $3 = '' THEN auth_tokens.refresh_token ELSE $3 END,
+         token_expiry = to_timestamp($4/1000),
+         last_used = CURRENT_TIMESTAMP`,
+      [tokenId, accessToken, refreshToken || '', expiryDate]
+    );
+    
+    // Also store in file for backward compatibility
+    const users = readUsers();
+    users[tokenId] = {
+      tokens: {
+        access_token: accessToken,
+        refresh_token: refreshToken || '',
+        expiry_date: expiryDate
+      },
+      created: new Date().toISOString()
+    };
+    saveUsers(users);
+    
+    return tokenId;
+  } catch (error) {
+    console.error('Error storing access token:', error);
+    return null;
+  }
+};
+
+// Get user ID by access token
+const getUserIdByAccessToken = async (accessToken) => {
+  try {
+    const result = await pool.query(
+      'SELECT user_id FROM auth_tokens WHERE access_token = $1',
+      [accessToken]
+    );
+    
+    if (result.rows.length > 0) {
+      return result.rows[0].user_id;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error finding user by access token:', error);
+    return null;
+  }
+};
+
 // Express app setup
 const app = express();
 app.use(express.json());
@@ -151,11 +210,7 @@ app.post('/oauth/token', async (req, res) => {
     console.log('Token exchange request query:', req.query);
     
     // Support multiple input formats (JSON body, form data, query parameters)
-    let params = {};
-    
-    // Combine all possible sources of parameters
-    Object.assign(params, req.query || {});
-    Object.assign(params, req.body || {});
+    const params = { ...req.query || {}, ...req.body || {} };
     
     // Check if content type is form-encoded and parse accordingly
     const contentType = req.headers['content-type'] || '';
@@ -198,6 +253,38 @@ app.post('/oauth/token', async (req, res) => {
       // Exchange authorization code for tokens
       tokenResponse = await oauth2Client.getToken(code);
       console.log('Got token response:', JSON.stringify(tokenResponse));
+      
+      // Ensure we have a refresh token by requesting offline access
+      if (!tokenResponse.tokens.refresh_token) {
+        console.warn('No refresh token received! This will cause problems later.');
+      }
+      
+      // Store the tokens and generate a user ID
+      const userId = await storeAccessToken(
+        tokenResponse.tokens.access_token,
+        tokenResponse.tokens.refresh_token,
+        tokenResponse.tokens.expiry_date
+      );
+      
+      if (!userId) {
+        console.error('Failed to store tokens and generate userId');
+        return res.status(500).json({ error: 'Failed to store authentication data' });
+      }
+      
+      console.log(`Generated userId ${userId} for this token`);
+      
+      // Format response properly for ChatGPT, including the userId
+      const formattedResponse = {
+        access_token: tokenResponse.tokens.access_token,
+        token_type: "bearer",
+        refresh_token: tokenResponse.tokens.refresh_token,
+        expires_in: Math.floor((tokenResponse.tokens.expiry_date - Date.now()) / 1000),
+        user_id: userId  // Include the user ID in the response!
+      };
+      
+      console.log('Token exchange successful - formatted response:', formattedResponse);
+      return res.json(formattedResponse);
+      
     } else if (effectiveGrantType === 'refresh_token') {
       if (!params.refresh_token) {
         return res.status(400).json({ error: 'refresh_token is required for refresh_token grant type' });
@@ -208,6 +295,16 @@ app.post('/oauth/token', async (req, res) => {
         refresh_token: params.refresh_token
       });
       tokenResponse = await oauth2Client.refreshAccessToken();
+      
+      // Update the stored tokens with the same user ID
+      const userId = await getUserIdByAccessToken(params.access_token);
+      if (userId) {
+        await storeAccessToken(
+          tokenResponse.tokens.access_token,
+          tokenResponse.tokens.refresh_token || params.refresh_token,
+          tokenResponse.tokens.expiry_date
+        );
+      }
     } else {
       return res.status(400).json({ error: 'Invalid or missing grant_type' });
     }
@@ -395,6 +492,12 @@ const getValidTokenForUser = async (userId) => {
     throw new Error("User ID is required");
   }
   
+  // Special case: If userId looks like an access token (starts with ya29.), return it directly
+  if (userId.startsWith('ya29.')) {
+    console.log(`User ID appears to be a token, returning it directly`);
+    return userId;
+  }
+  
   console.log(`Attempting to get token for user: ${userId}`);
   
   // First try to get tokens from database (for SSO users)
@@ -480,11 +583,48 @@ app.post("/api/log-data-v1", async (req, res) => {
     responseLength: assistantResponse?.length
   });
   
-  // Get userId from request body or Authorization header if using OAuth
-  const authUserId = userId || req.get('Authorization')?.split(' ')[1];
+  let authUserId = userId;
+  let accessToken = null;
+  
+  // Check for Authorization header (Bearer token)
+  const authHeader = req.get('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
+    console.log('Got Bearer token, looking up associated user ID');
+    
+    // Try to get user ID from token
+    const tokenUserId = await getUserIdByAccessToken(accessToken);
+    if (tokenUserId) {
+      console.log(`Found user ID ${tokenUserId} for this Bearer token`);
+      authUserId = tokenUserId;
+    } else {
+      // If no user ID found but we have a token, create one on the fly
+      console.log('No user ID found for token, creating one now');
+      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
+      console.log(`Created user ID ${authUserId} for this token`);
+    }
+  }
+  
+  // Special case: If userId looks like an access token (starts with ya29.), treat it as a token
+  if (!authUserId && userId && userId.startsWith('ya29.')) {
+    console.log('User ID appears to be an access token, treating it as such');
+    accessToken = userId;
+    
+    // Check if we already have a user ID for this token
+    const tokenUserId = await getUserIdByAccessToken(accessToken);
+    if (tokenUserId) {
+      console.log(`Found user ID ${tokenUserId} for this token`);
+      authUserId = tokenUserId;
+    } else {
+      // Create a new user ID for this token
+      console.log('No user ID found for token, creating one now');
+      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
+      console.log(`Created user ID ${authUserId} for this token`);
+    }
+  }
   
   if (!authUserId) {
-    console.error('Log attempt failed: No user ID provided');
+    console.error('Log attempt failed: No user ID provided or found');
     return res.status(401).json({ error: "User ID is required" });
   }
   
@@ -502,9 +642,17 @@ app.post("/api/log-data-v1", async (req, res) => {
   }
   
   try {
-    // Get a valid token for this user
-    console.log(`Getting token for user: ${authUserId}`);
-    const token = await getValidTokenForUser(authUserId);
+    // For access token provided directly as user ID, use it directly instead of looking it up
+    let token;
+    if (accessToken && authUserId && userId === accessToken) {
+      console.log('Using provided access token directly');
+      token = accessToken;
+    } else {
+      // Get a valid token for this user
+      console.log(`Getting token for user: ${authUserId}`);
+      token = await getValidTokenForUser(authUserId);
+    }
+    
     console.log(`Successfully obtained token for user: ${authUserId}`);
     
     // Create OAuth client with the token
@@ -751,6 +899,34 @@ app.get('/openapi.json', (req, res) => {
           "responses": {
             "200": {
               "description": "Successfully retrieved sheet data"
+            }
+          }
+        }
+      },
+      "/get-user-id": {
+        "get": {
+          "summary": "Get user ID for an authenticated session",
+          "operationId": "getUserId",
+          "security": [{ "oauth2": ["https://www.googleapis.com/auth/spreadsheets"] }],
+          "responses": {
+            "200": {
+              "description": "Successfully retrieved user ID",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "user_id": {
+                        "type": "string",
+                        "description": "User ID to use with other API endpoints"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }

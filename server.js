@@ -228,6 +228,18 @@ const initDatabase = async () => {
         last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Add user_preferences table to store spreadsheet associations and settings
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_preferences (
+        email TEXT PRIMARY KEY,
+        default_spreadsheet_id TEXT,
+        default_categories JSONB,
+        budget_limits JSONB,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
@@ -510,7 +522,7 @@ app.get("/auth/sso", (req, res) => {
   res.redirect(authUrl);
 });
 
-// Auth callback that stores tokens and returns user ID
+// Auth callback that stores tokens, email, and returns user ID
 app.get("/auth/callback", async (req, res) => {
   const { code, state } = req.query;
   const userId = state; // Retrieve user ID from state
@@ -519,10 +531,30 @@ app.get("/auth/callback", async (req, res) => {
     const oauth2Client = createOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
     
+    // Get user email from Google API
+    let userEmail = null;
+    try {
+      oauth2Client.setCredentials(tokens);
+      const people = google.people({ version: 'v1', auth: oauth2Client });
+      const profile = await people.people.get({
+        resourceName: 'people/me',
+        personFields: 'emailAddresses',
+      });
+      
+      if (profile.data.emailAddresses && profile.data.emailAddresses.length > 0) {
+        userEmail = profile.data.emailAddresses[0].value;
+        console.log(`Retrieved email: ${userEmail} for user ${userId}`);
+      }
+    } catch (emailError) {
+      console.error('Error retrieving user email:', emailError);
+      // Continue without email if retrieval fails
+    }
+    
     // Save tokens with user ID
     const users = readUsers();
     users[userId] = {
       tokens: tokens,
+      email: userEmail,
       created: new Date().toISOString()
     };
     saveUsers(users);
@@ -540,13 +572,14 @@ app.get("/auth/callback", async (req, res) => {
       // Store tokens in database for SSO
       try {
         await pool.query(
-          'INSERT INTO auth_tokens(user_id, access_token, refresh_token, token_expiry) VALUES($1, $2, $3, $4) ' +
-          'ON CONFLICT (user_id) DO UPDATE SET access_token = $2, refresh_token = $3, token_expiry = $4, last_used = CURRENT_TIMESTAMP',
+          'INSERT INTO auth_tokens(user_id, access_token, refresh_token, token_expiry, email) VALUES($1, $2, $3, $4, $5) ' +
+          'ON CONFLICT (user_id) DO UPDATE SET access_token = $2, refresh_token = $3, token_expiry = $4, email = $5, last_used = CURRENT_TIMESTAMP',
           [
             userId, 
             tokens.access_token, 
             tokens.refresh_token, 
-            new Date(tokens.expiry_date)
+            new Date(tokens.expiry_date),
+            userEmail
           ]
         );
       } catch (dbError) {
@@ -555,7 +588,7 @@ app.get("/auth/callback", async (req, res) => {
     }
     
     // Redirect to success page with user ID
-    res.redirect(`/auth-success?userId=${userId}`);
+    res.redirect(`/auth-success?userId=${userId}&email=${encodeURIComponent(userEmail || '')}`);
   } catch (error) {
     res.status(500).json({ error: "Authentication failed", details: error.message });
   }
@@ -590,6 +623,7 @@ app.get('/auth/test', (req, res) => {
 // Success page that displays the user ID
 app.get("/auth-success", (req, res) => {
   const userId = req.query.userId;
+  const email = req.query.email || 'Not available';
   
   res.send(`
     <html>
@@ -603,6 +637,7 @@ app.get("/auth-success", (req, res) => {
           .success { color: green; display: none; margin-top: 10px; }
           .countdown { font-weight: bold; color: #4285f4; }
           .instructions { border-left: 4px solid #fbbc05; padding-left: 15px; margin: 20px 0; }
+          .email-info { color: #4285f4; font-weight: bold; }
         </style>
       </head>
       <body>
@@ -613,10 +648,12 @@ app.get("/auth-success", (req, res) => {
           <h3>What happens next:</h3>
           <p>1. This window will automatically close in <span class="countdown" id="countdown">5</span> seconds.</p>
           <p>2. Return to your ChatGPT conversation - it will continue automatically.</p>
-          <p>3. If the conversation doesn't continue, simply type "continue" in ChatGPT.</p>
+          <p>3. If the conversation doesn't continue, simply type "next" in ChatGPT.</p>
         </div>
         
-        <p>Your user ID (save for future reference):</p>
+        <p>Your account information:</p>
+        <p>Email: <span class="email-info">${email}</span></p>
+        <p>User ID (save for future reference):</p>
         <div class="id-box">
           <code id="userId">${userId}</code>
         </div>
@@ -978,7 +1015,48 @@ app.post("/api/get-sheet-data", async (req, res) => {
 // Endpoint for ChatGPT to check if a user is authenticated
 app.get('/auth/check-session', async (req, res) => {
   const sessionId = req.query.session || req.cookies.auth_session;
+  const userId = req.query.userId || req.cookies.gpt_sheet_user_id;
   
+  // First check for specific user ID if provided
+  if (userId) {
+    try {
+      const result = await pool.query(
+        'SELECT user_id, email, created_at, last_used FROM auth_tokens WHERE user_id = $1',
+        [userId]
+      );
+      
+      if (result.rows.length > 0) {
+        const userData = result.rows[0];
+        
+        // Get user preferences if email is available
+        let preferences = null;
+        if (userData.email) {
+          const prefResult = await pool.query(
+            'SELECT default_spreadsheet_id, default_categories, budget_limits FROM user_preferences WHERE email = $1',
+            [userData.email]
+          );
+          
+          if (prefResult.rows.length > 0) {
+            preferences = prefResult.rows[0];
+          }
+        }
+        
+        return res.json({
+          authenticated: true,
+          userId: userData.user_id,
+          email: userData.email,
+          authenticatedAt: userData.created_at,
+          lastUsed: userData.last_used,
+          preferences: preferences,
+          message: 'Authentication successful'
+        });
+      }
+    } catch (error) {
+      console.error('Error checking user authentication:', error);
+    }
+  }
+  
+  // If no specific user ID or not found, check for recent authentication
   if (!sessionId) {
     return res.status(404).json({ 
       authenticated: false,
@@ -989,7 +1067,7 @@ app.get('/auth/check-session', async (req, res) => {
   try {
     // Check if the sessionId is in our db of authenticated sessions
     const result = await pool.query(
-      'SELECT user_id, created_at FROM auth_tokens WHERE created_at > NOW() - INTERVAL \'10 minutes\' ORDER BY created_at DESC LIMIT 1'
+      'SELECT user_id, email, created_at FROM auth_tokens WHERE created_at > NOW() - INTERVAL \'1 day\' ORDER BY created_at DESC LIMIT 1'
     );
     
     if (result.rows.length === 0) {
@@ -1000,13 +1078,27 @@ app.get('/auth/check-session', async (req, res) => {
     }
     
     // Return the most recently authenticated user
-    const userId = result.rows[0].user_id;
-    const createdAt = result.rows[0].created_at;
+    const userData = result.rows[0];
+    
+    // Get user preferences if email is available
+    let preferences = null;
+    if (userData.email) {
+      const prefResult = await pool.query(
+        'SELECT default_spreadsheet_id, default_categories, budget_limits FROM user_preferences WHERE email = $1',
+        [userData.email]
+      );
+      
+      if (prefResult.rows.length > 0) {
+        preferences = prefResult.rows[0];
+      }
+    }
     
     return res.json({
       authenticated: true,
-      userId: userId,
-      authenticatedAt: createdAt,
+      userId: userData.user_id,
+      email: userData.email,
+      authenticatedAt: userData.created_at,
+      preferences: preferences,
       message: 'Authentication successful'
     });
   } catch (error) {
@@ -1018,76 +1110,342 @@ app.get('/auth/check-session', async (req, res) => {
   }
 });
 
-// Helper function to ensure a sheet exists with proper headers
-const ensureSheetExists = async (sheets, spreadsheetId, sheetName, headers) => {
+// New endpoint to store user preferences
+app.post('/api/user/preferences', async (req, res) => {
+  const { email, spreadsheetId, categories, budgetLimits } = req.body;
+  
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+  
   try {
-    // Try to get the sheet info
-    await sheets.spreadsheets.get({
-      spreadsheetId,
-      ranges: [`${sheetName}!A1`]
+    await pool.query(
+      `INSERT INTO user_preferences (email, default_spreadsheet_id, default_categories, budget_limits)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) 
+       DO UPDATE SET 
+         default_spreadsheet_id = COALESCE($2, user_preferences.default_spreadsheet_id),
+         default_categories = COALESCE($3, user_preferences.default_categories),
+         budget_limits = COALESCE($4, user_preferences.budget_limits),
+         last_updated = CURRENT_TIMESTAMP`,
+      [
+        email, 
+        spreadsheetId || null, 
+        categories ? JSON.stringify(categories) : null, 
+        budgetLimits ? JSON.stringify(budgetLimits) : null
+      ]
+    );
+    
+    res.json({ 
+      success: true, 
+      message: 'User preferences updated successfully' 
     });
-    console.log(`Sheet "${sheetName}" exists`);
-    
-    // Check if headers exist and match expected headers
-    const headerResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${sheetName}!A1:Z1`
+  } catch (error) {
+    console.error('Error updating user preferences:', error);
+    res.status(500).json({ 
+      error: 'Failed to update user preferences', 
+      details: error.message 
     });
+  }
+});
+
+// New endpoint to get user preferences
+app.get('/api/user/preferences', async (req, res) => {
+  const { email, userId } = req.query;
+  
+  if (!email && !userId) {
+    return res.status(400).json({ error: 'Email or userId is required' });
+  }
+  
+  try {
+    let userEmail = email;
     
-    const existingHeaders = headerResponse.data.values?.[0] || [];
+    // If userId is provided but not email, try to get email from auth_tokens
+    if (!userEmail && userId) {
+      const userResult = await pool.query(
+        'SELECT email FROM auth_tokens WHERE user_id = $1',
+        [userId]
+      );
+      
+      if (userResult.rows.length > 0 && userResult.rows[0].email) {
+        userEmail = userResult.rows[0].email;
+      } else {
+        return res.status(404).json({ error: 'User not found or email not available' });
+      }
+    }
     
-    // If headers don't match or are missing, update them
-    if (existingHeaders.length === 0 || !headers.every(h => existingHeaders.includes(h))) {
-      console.log(`Updating headers for sheet "${sheetName}"`);
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`,
-        valueInputOption: "USER_ENTERED",
-        resource: {
-          values: [headers]
-        }
+    const result = await pool.query(
+      'SELECT default_spreadsheet_id, default_categories, budget_limits, last_updated FROM user_preferences WHERE email = $1',
+      [userEmail]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.json({ 
+        found: false,
+        message: 'No preferences found for this user'
       });
     }
-  } catch (sheetError) {
-    if (sheetError.code === 404 || sheetError.message.includes('not found')) {
-      // Sheet doesn't exist, create it
-      console.log(`Sheet "${sheetName}" doesn't exist, creating it`);
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        resource: {
-          requests: [{
-            addSheet: {
-              properties: {
-                title: sheetName
-              }
-            }
-          }]
+    
+    res.json({
+      found: true,
+      email: userEmail,
+      preferences: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error retrieving user preferences:', error);
+    res.status(500).json({ 
+      error: 'Failed to retrieve user preferences', 
+      details: error.message 
+    });
+  }
+});
+
+// Enhanced function to check and setup all required sheets at once
+const setupFinanceSheets = async (sheets, spreadsheetId) => {
+  console.log(`Setting up finance sheets for spreadsheet: ${spreadsheetId}`);
+  
+  // Define all required sheets with their headers
+  const requiredSheets = {
+    'Finances': [
+      'Unique ID', 'Date', 'Category', 'Subcategory', 'Amount', 'Type', 'Payment Method', 'Notes'
+    ],
+    'Budget Tracking': [
+      'Category', 'Budget Limit', 'Spent', 'Remaining Budget', 'Status'
+    ],
+    'Grocery Receipts': [
+      'Unique ID', 'Date', 'Store', 'Item', 'Price'
+    ],
+    'Online Transactions': [
+      'Unique ID', 'Date', 'Vendor', 'Item', 'Price'
+    ],
+    'Credit Utilization': [
+      'Unique ID', 'Date', 'Account', 'Credit Limit', 'Credit Used', 'Remaining Credit', 'Utilization %'
+    ],
+    'Predictive Alerts': [
+      'Unique ID', 'Date', 'Type', 'Message', 'Trigger'
+    ],
+    'Token Usage': [
+      'Unique ID', 'Date', 'Tokens Used', 'Estimated Cost', 'Query'
+    ],
+    'Data': [
+      'User Message', 'Assistant Response', 'Timestamp'
+    ]
+  };
+  
+  // First, get all existing sheets
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties.title'
+  });
+  
+  const existingSheets = spreadsheet.data.sheets.map(sheet => sheet.properties.title);
+  console.log(`Existing sheets: ${existingSheets.join(', ')}`);
+  
+  // Create batch requests for missing sheets
+  const batchRequests = [];
+  const sheetsToCreate = [];
+  
+  for (const [sheetName, headers] of Object.entries(requiredSheets)) {
+    if (!existingSheets.includes(sheetName)) {
+      sheetsToCreate.push(sheetName);
+      batchRequests.push({
+        addSheet: {
+          properties: {
+            title: sheetName
+          }
         }
       });
-      
-      // Add headers
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`,
-        valueInputOption: "USER_ENTERED",
-        resource: {
-          values: [headers]
-        }
-      });
-      console.log(`Created sheet "${sheetName}" with headers`);
-    } else {
-      // Some other error with the sheet
-      throw sheetError;
     }
   }
+  
+  // Create missing sheets in a single batch request if needed
+  if (batchRequests.length > 0) {
+    console.log(`Creating missing sheets: ${sheetsToCreate.join(', ')}`);
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: batchRequests
+      }
+    });
+  }
+  
+  // Now check and update headers for all sheets
+  const headerUpdates = [];
+  
+  for (const [sheetName, headers] of Object.entries(requiredSheets)) {
+    try {
+      // Check if headers exist and match expected headers
+      const headerResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${sheetName}!A1:Z1`
+      });
+      
+      const existingHeaders = headerResponse.data.values?.[0] || [];
+      
+      // If headers don't match or are missing, update them
+      if (existingHeaders.length === 0 || !headers.every(h => existingHeaders.includes(h))) {
+        console.log(`Updating headers for sheet "${sheetName}"`);
+        headerUpdates.push(
+          sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`,
+            valueInputOption: "USER_ENTERED",
+            resource: {
+              values: [headers]
+            }
+          })
+        );
+      }
+    } catch (error) {
+      console.error(`Error checking headers for sheet ${sheetName}:`, error);
+    }
+  }
+  
+  // Execute all header updates in parallel
+  if (headerUpdates.length > 0) {
+    await Promise.all(headerUpdates);
+    console.log('All headers updated successfully');
+  }
+  
+  return {
+    success: true,
+    sheetsCreated: sheetsToCreate,
+    message: 'Finance sheets setup completed successfully'
+  };
 };
 
-// Generate a unique ID for transactions
-const generateTransactionId = () => {
-  return 'txn_' + crypto.randomBytes(8).toString('hex');
-};
+// New endpoint to setup all finance sheets at once
+app.post('/api/finance/setup-sheets', async (req, res) => {
+  const { spreadsheetId, userId, email } = req.body;
+  
+  console.log('Finance sheets setup request received:', {
+    spreadsheetId,
+    userId,
+    email
+  });
+  
+  let authUserId = userId;
+  let accessToken = null;
+  
+  // Authentication logic (same as other endpoints)
+  const authHeader = req.get('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    accessToken = authHeader.substring(7);
+    console.log('Got Bearer token from Authorization header');
+    
+    try {
+      const tokenUserId = await getUserIdByAccessToken(accessToken);
+      if (tokenUserId) {
+        console.log(`Found user ID ${tokenUserId} for this Bearer token`);
+        authUserId = tokenUserId;
+      }
+    } catch (authError) {
+      console.error('Error looking up user ID from token:', authError);
+      authUserId = accessToken;
+    }
+  }
+  
+  if (!authUserId && userId && userId.startsWith('ya29.')) {
+    accessToken = userId;
+    authUserId = userId;
+  }
+  
+  if (!authUserId && accessToken) {
+    try {
+      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
+    } catch (storeError) {
+      authUserId = accessToken;
+    }
+  }
+  
+  if (!authUserId) {
+    authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
+    try {
+      global.tempUsers = global.tempUsers || {};
+      global.tempUsers[authUserId] = {
+        created: new Date().toISOString()
+      };
+    } catch (tempError) {
+      console.error('Failed to store temporary user:', tempError);
+    }
+  }
+  
+  // Validate required fields
+  if (!spreadsheetId) {
+    return res.status(400).json({ error: "spreadsheetId is required" });
+  }
+  
+  try {
+    // Get token
+    let token;
+    if (authUserId.startsWith('ya29.')) {
+      token = authUserId;
+    } else if (accessToken) {
+      token = accessToken;
+    } else {
+      token = await getValidTokenForUser(authUserId);
+    }
+    
+    // Create OAuth client with the token
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({ access_token: token });
+    
+    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+    
+    // Setup all finance sheets
+    const result = await setupFinanceSheets(sheets, spreadsheetId);
+    
+    // If email is provided, store spreadsheet ID in user preferences
+    if (email) {
+      try {
+        await pool.query(
+          `INSERT INTO user_preferences (email, default_spreadsheet_id)
+           VALUES ($1, $2)
+           ON CONFLICT (email) 
+           DO UPDATE SET 
+             default_spreadsheet_id = $2,
+             last_updated = CURRENT_TIMESTAMP`,
+          [email, spreadsheetId]
+        );
+        console.log(`Associated spreadsheet ${spreadsheetId} with email ${email}`);
+      } catch (prefError) {
+        console.error('Error storing spreadsheet preference:', prefError);
+      }
+    }
+    
+    res.json({
+      message: "Finance sheets setup successfully",
+      result
+    });
+  } catch (error) {
+    console.error("Finance sheets setup error:", error);
+    
+    let errorMessage = "Failed to setup finance sheets";
+    let statusCode = 500;
+    
+    if (error.message.includes('User not found')) {
+      errorMessage = "User not found or not authenticated";
+      statusCode = 401;
+    } else if (error.message.includes('invalid_grant')) {
+      errorMessage = "Authentication expired, please re-authenticate";
+      statusCode = 401;
+    } else if (error.code === 403 || error.message.includes('permission')) {
+      errorMessage = "Permission denied to access the spreadsheet";
+      statusCode = 403;
+    } else if (error.code === 404 || error.message.includes('not found')) {
+      errorMessage = "Spreadsheet not found";
+      statusCode = 404;
+    }
+    
+    res.status(statusCode).json({ 
+      error: errorMessage, 
+      details: error.message,
+      code: error.code || 'UNKNOWN'
+    });
+  }
+});
 
-// Function to categorize and process financial data
+// Modify the processFinancialData function to use the setupFinanceSheets function
 const processFinancialData = async (sheets, spreadsheetId, data) => {
   const transactionId = generateTransactionId();
   const timestamp = new Date().toISOString();
@@ -1119,9 +1477,8 @@ const processFinancialData = async (sheets, spreadsheetId, data) => {
   };
   
   // Ensure all required sheets exist with proper headers
-  for (const [sheetName, headers] of Object.entries(sheetStructures)) {
-    await ensureSheetExists(sheets, spreadsheetId, sheetName, headers);
-  }
+  // Use the new setupFinanceSheets function instead of individual calls
+  await setupFinanceSheets(sheets, spreadsheetId);
   
   // Process main transaction data
   if (data.transaction) {
@@ -1362,152 +1719,6 @@ const processFinancialData = async (sheets, spreadsheetId, data) => {
     results
   };
 };
-
-// New endpoint for financial data processing
-app.post("/api/finance/log-transaction", async (req, res) => {
-  const { spreadsheetId, userId, data } = req.body;
-  
-  console.log('Finance transaction request received:', {
-    spreadsheetId,
-    userId,
-    dataType: data ? Object.keys(data) : 'No data'
-  });
-  
-  let authUserId = userId;
-  let accessToken = null;
-  
-  // SOLUTION 1: Check for Authorization header (Bearer token)
-  const authHeader = req.get('Authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
-    console.log('Got Bearer token from Authorization header');
-    
-    // Try to get user ID from token
-    try {
-      const tokenUserId = await getUserIdByAccessToken(accessToken);
-      if (tokenUserId) {
-        console.log(`Found user ID ${tokenUserId} for this Bearer token`);
-        authUserId = tokenUserId;
-      }
-    } catch (authError) {
-      console.error('Error looking up user ID from token:', authError);
-      // Use token directly as fallback
-      authUserId = accessToken;
-      console.log('Using token directly as user ID (fallback)');
-    }
-  }
-  
-  // SOLUTION 2: Check if userId looks like an access token
-  if (!authUserId && userId && userId.startsWith('ya29.')) {
-    console.log('User ID appears to be an access token, using directly');
-    accessToken = userId;
-    authUserId = userId; // Use token directly
-  }
-  
-  // SOLUTION 3: Try to create a new user ID if we have a token but no user ID
-  if (!authUserId && accessToken) {
-    try {
-      console.log('Creating new user ID for token');
-      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
-    } catch (storeError) {
-      console.error('Failed to create user ID:', storeError);
-      // Use token directly as fallback
-      authUserId = accessToken;
-      console.log('Using token directly as user ID (fallback)');
-    }
-  }
-  
-  // SOLUTION 4: Generate a temporary user ID if nothing else works
-  if (!authUserId) {
-    console.log('No user ID or token available, generating temporary ID');
-    authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
-    
-    // Store the temporary ID with empty credentials
-    // This allows at least some form of session continuity
-    try {
-      global.tempUsers = global.tempUsers || {};
-      global.tempUsers[authUserId] = {
-        created: new Date().toISOString()
-      };
-    } catch (tempError) {
-      console.error('Failed to store temporary user:', tempError);
-    }
-  }
-  
-  console.log(`Final user ID for finance transaction: ${authUserId}`);
-  
-  // Validate required fields
-  if (!spreadsheetId) {
-    console.error('Finance transaction failed: No spreadsheetId provided');
-    return res.status(400).json({ error: "spreadsheetId is required" });
-  }
-  
-  if (!data) {
-    console.error('Finance transaction failed: No data provided');
-    return res.status(400).json({ error: "data object is required" });
-  }
-  
-  try {
-    // SOLUTION 5: Direct token usage if it's a token
-    let token;
-    if (authUserId.startsWith('ya29.')) {
-      console.log('Using user ID directly as token');
-      token = authUserId;
-    } else if (accessToken) {
-      console.log('Using stored access token');
-      token = accessToken;
-    } else {
-      // Get a valid token for this user through normal means
-      console.log(`Getting token for user: ${authUserId}`);
-      token = await getValidTokenForUser(authUserId);
-    }
-    
-    console.log('Successfully obtained token for finance transaction');
-    
-    // Create OAuth client with the token
-    const oauth2Client = createOAuth2Client();
-    oauth2Client.setCredentials({ access_token: token });
-    
-    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
-    
-    // Process the financial data and update appropriate sheets
-    const result = await processFinancialData(sheets, spreadsheetId, data);
-    
-    console.log('Finance transaction processed successfully:', result);
-    res.json({ 
-      message: "Finance transaction processed successfully", 
-      transactionId: result.transactionId,
-      timestamp: result.timestamp,
-      results: result.results
-    });
-  } catch (error) {
-    console.error("Finance transaction error:", error);
-    
-    // Provide a more specific error message based on the error type
-    let errorMessage = "Failed to process finance transaction";
-    let statusCode = 500;
-    
-    if (error.message.includes('User not found')) {
-      errorMessage = "User not found or not authenticated";
-      statusCode = 401;
-    } else if (error.message.includes('invalid_grant')) {
-      errorMessage = "Authentication expired, please re-authenticate";
-      statusCode = 401;
-    } else if (error.code === 403 || error.message.includes('permission')) {
-      errorMessage = "Permission denied to access the spreadsheet";
-      statusCode = 403;
-    } else if (error.code === 404 || error.message.includes('not found')) {
-      errorMessage = "Spreadsheet not found";
-      statusCode = 404;
-    }
-    
-    res.status(statusCode).json({ 
-      error: errorMessage, 
-      details: error.message,
-      code: error.code || 'UNKNOWN'
-    });
-  }
-});
 
 // Update OpenAPI specification to include finance endpoints
 app.get('/openapi.json', (req, res) => {

@@ -1018,14 +1018,505 @@ app.get('/auth/check-session', async (req, res) => {
   }
 });
 
-// OpenAPI specification with userId instead of token
+// Helper function to ensure a sheet exists with proper headers
+const ensureSheetExists = async (sheets, spreadsheetId, sheetName, headers) => {
+  try {
+    // Try to get the sheet info
+    await sheets.spreadsheets.get({
+      spreadsheetId,
+      ranges: [`${sheetName}!A1`]
+    });
+    console.log(`Sheet "${sheetName}" exists`);
+    
+    // Check if headers exist and match expected headers
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!A1:Z1`
+    });
+    
+    const existingHeaders = headerResponse.data.values?.[0] || [];
+    
+    // If headers don't match or are missing, update them
+    if (existingHeaders.length === 0 || !headers.every(h => existingHeaders.includes(h))) {
+      console.log(`Updating headers for sheet "${sheetName}"`);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`,
+        valueInputOption: "USER_ENTERED",
+        resource: {
+          values: [headers]
+        }
+      });
+    }
+  } catch (sheetError) {
+    if (sheetError.code === 404 || sheetError.message.includes('not found')) {
+      // Sheet doesn't exist, create it
+      console.log(`Sheet "${sheetName}" doesn't exist, creating it`);
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        resource: {
+          requests: [{
+            addSheet: {
+              properties: {
+                title: sheetName
+              }
+            }
+          }]
+        }
+      });
+      
+      // Add headers
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`,
+        valueInputOption: "USER_ENTERED",
+        resource: {
+          values: [headers]
+        }
+      });
+      console.log(`Created sheet "${sheetName}" with headers`);
+    } else {
+      // Some other error with the sheet
+      throw sheetError;
+    }
+  }
+};
+
+// Generate a unique ID for transactions
+const generateTransactionId = () => {
+  return 'txn_' + crypto.randomBytes(8).toString('hex');
+};
+
+// Function to categorize and process financial data
+const processFinancialData = async (sheets, spreadsheetId, data) => {
+  const transactionId = generateTransactionId();
+  const timestamp = new Date().toISOString();
+  const results = [];
+  
+  // Define sheet structures with their headers
+  const sheetStructures = {
+    'Finances': [
+      'Unique ID', 'Date', 'Category', 'Subcategory', 'Amount', 'Type', 'Payment Method', 'Notes'
+    ],
+    'Budget Tracking': [
+      'Category', 'Budget Limit', 'Spent', 'Remaining Budget', 'Status'
+    ],
+    'Grocery Receipts': [
+      'Unique ID', 'Date', 'Store', 'Item', 'Price'
+    ],
+    'Online Transactions': [
+      'Unique ID', 'Date', 'Vendor', 'Item', 'Price'
+    ],
+    'Credit Utilization': [
+      'Unique ID', 'Date', 'Account', 'Credit Limit', 'Credit Used', 'Remaining Credit', 'Utilization %'
+    ],
+    'Predictive Alerts': [
+      'Unique ID', 'Date', 'Type', 'Message', 'Trigger'
+    ],
+    'Token Usage': [
+      'Unique ID', 'Date', 'Tokens Used', 'Estimated Cost', 'Query'
+    ]
+  };
+  
+  // Ensure all required sheets exist with proper headers
+  for (const [sheetName, headers] of Object.entries(sheetStructures)) {
+    await ensureSheetExists(sheets, spreadsheetId, sheetName, headers);
+  }
+  
+  // Process main transaction data
+  if (data.transaction) {
+    const { 
+      category, 
+      subcategory = '', 
+      amount, 
+      type, // 'Income' or 'Expense'
+      paymentMethod = '',
+      notes = ''
+    } = data.transaction;
+    
+    // Add to main Finances sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: 'Finances!A:H',
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[
+          transactionId, 
+          timestamp, 
+          category, 
+          subcategory, 
+          amount, 
+          type, 
+          paymentMethod, 
+          notes
+        ]],
+      },
+    });
+    results.push({ sheet: 'Finances', status: 'success' });
+    
+    // Update Budget Tracking sheet
+    if (type === 'Expense') {
+      try {
+        // Get current budget data for this category
+        const budgetResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `Budget Tracking!A:E`
+        });
+        
+        const budgetRows = budgetResponse.data.values || [];
+        let categoryRow = budgetRows.findIndex(row => row[0] === category);
+        
+        if (categoryRow > 0) { // Skip header row
+          // Category exists, update spent amount
+          const currentBudget = parseFloat(budgetRows[categoryRow][1]) || 0;
+          const currentSpent = parseFloat(budgetRows[categoryRow][2]) || 0;
+          const newSpent = currentSpent + parseFloat(amount);
+          const remaining = currentBudget - newSpent;
+          const status = remaining < 0 ? 'OVER BUDGET' : 
+                        (remaining < 0.1 * currentBudget ? 'WARNING' : 'OK');
+          
+          await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `Budget Tracking!C${categoryRow + 1}:E${categoryRow + 1}`,
+            valueInputOption: "USER_ENTERED",
+            resource: {
+              values: [[newSpent, remaining, status]]
+            }
+          });
+          
+          // If over budget, add to Predictive Alerts
+          if (status !== 'OK') {
+            await sheets.spreadsheets.values.append({
+              spreadsheetId,
+              range: 'Predictive Alerts!A:E',
+              valueInputOption: "USER_ENTERED",
+              requestBody: {
+                values: [[
+                  transactionId,
+                  timestamp,
+                  'Budget Alert',
+                  `${category} is ${status}: ${remaining < 0 ? 'Overspent by' : 'Only'} $${Math.abs(remaining).toFixed(2)} ${remaining < 0 ? 'over budget' : 'remaining'}`,
+                  'Budget Tracking'
+                ]],
+              },
+            });
+            results.push({ sheet: 'Predictive Alerts', status: 'success', alert: status });
+          }
+        } else {
+          // Category doesn't exist, add it with default budget
+          await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'Budget Tracking!A:E',
+            valueInputOption: "USER_ENTERED",
+            requestBody: {
+              values: [[
+                category,
+                '1000', // Default budget
+                amount,
+                (1000 - parseFloat(amount)).toString(),
+                'OK'
+              ]],
+            },
+          });
+        }
+        results.push({ sheet: 'Budget Tracking', status: 'success' });
+      } catch (budgetError) {
+        console.error('Error updating budget tracking:', budgetError);
+        results.push({ sheet: 'Budget Tracking', status: 'error', message: budgetError.message });
+      }
+    }
+  }
+  
+  // Process grocery receipt items
+  if (data.groceryItems && data.groceryItems.length > 0) {
+    try {
+      const store = data.store || 'Unknown Store';
+      const groceryRows = data.groceryItems.map(item => [
+        transactionId,
+        timestamp,
+        store,
+        item.name,
+        item.price
+      ]);
+      
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: 'Grocery Receipts!A:E',
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: groceryRows,
+        },
+      });
+      results.push({ sheet: 'Grocery Receipts', status: 'success', itemCount: groceryRows.length });
+    } catch (groceryError) {
+      console.error('Error logging grocery items:', groceryError);
+      results.push({ sheet: 'Grocery Receipts', status: 'error', message: groceryError.message });
+    }
+  }
+  
+  // Process online transaction
+  if (data.onlineTransaction) {
+    try {
+      const { vendor, item, price } = data.onlineTransaction;
+      
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: 'Online Transactions!A:E',
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[
+            transactionId,
+            timestamp,
+            vendor,
+            item,
+            price
+          ]],
+        },
+      });
+      results.push({ sheet: 'Online Transactions', status: 'success' });
+    } catch (onlineError) {
+      console.error('Error logging online transaction:', onlineError);
+      results.push({ sheet: 'Online Transactions', status: 'error', message: onlineError.message });
+    }
+  }
+  
+  // Process credit card usage
+  if (data.creditUsage) {
+    try {
+      const { account, creditLimit, creditUsed } = data.creditUsage;
+      const remainingCredit = parseFloat(creditLimit) - parseFloat(creditUsed);
+      const utilizationPercent = (parseFloat(creditUsed) / parseFloat(creditLimit) * 100).toFixed(2);
+      
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: 'Credit Utilization!A:G',
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[
+            transactionId,
+            timestamp,
+            account,
+            creditLimit,
+            creditUsed,
+            remainingCredit,
+            utilizationPercent
+          ]],
+        },
+      });
+      
+      // Add alert if utilization is high
+      if (parseFloat(utilizationPercent) > 80) {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: 'Predictive Alerts!A:E',
+          valueInputOption: "USER_ENTERED",
+          requestBody: {
+            values: [[
+              transactionId,
+              timestamp,
+              'Credit Alert',
+              `High credit utilization (${utilizationPercent}%) on account ${account}`,
+              'Credit Utilization'
+            ]],
+          },
+        });
+        results.push({ sheet: 'Predictive Alerts', status: 'success', alert: 'High Credit Utilization' });
+      }
+      
+      results.push({ sheet: 'Credit Utilization', status: 'success' });
+    } catch (creditError) {
+      console.error('Error logging credit usage:', creditError);
+      results.push({ sheet: 'Credit Utilization', status: 'error', message: creditError.message });
+    }
+  }
+  
+  // Log token usage if provided
+  if (data.tokenUsage) {
+    try {
+      const { tokensUsed, estimatedCost, query } = data.tokenUsage;
+      
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: 'Token Usage!A:E',
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[
+            transactionId,
+            timestamp,
+            tokensUsed,
+            estimatedCost,
+            query
+          ]],
+        },
+      });
+      results.push({ sheet: 'Token Usage', status: 'success' });
+    } catch (tokenError) {
+      console.error('Error logging token usage:', tokenError);
+      results.push({ sheet: 'Token Usage', status: 'error', message: tokenError.message });
+    }
+  }
+  
+  return {
+    transactionId,
+    timestamp,
+    results
+  };
+};
+
+// New endpoint for financial data processing
+app.post("/api/finance/log-transaction", async (req, res) => {
+  const { spreadsheetId, userId, data } = req.body;
+  
+  console.log('Finance transaction request received:', {
+    spreadsheetId,
+    userId,
+    dataType: data ? Object.keys(data) : 'No data'
+  });
+  
+  let authUserId = userId;
+  let accessToken = null;
+  
+  // SOLUTION 1: Check for Authorization header (Bearer token)
+  const authHeader = req.get('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
+    console.log('Got Bearer token from Authorization header');
+    
+    // Try to get user ID from token
+    try {
+      const tokenUserId = await getUserIdByAccessToken(accessToken);
+      if (tokenUserId) {
+        console.log(`Found user ID ${tokenUserId} for this Bearer token`);
+        authUserId = tokenUserId;
+      }
+    } catch (authError) {
+      console.error('Error looking up user ID from token:', authError);
+      // Use token directly as fallback
+      authUserId = accessToken;
+      console.log('Using token directly as user ID (fallback)');
+    }
+  }
+  
+  // SOLUTION 2: Check if userId looks like an access token
+  if (!authUserId && userId && userId.startsWith('ya29.')) {
+    console.log('User ID appears to be an access token, using directly');
+    accessToken = userId;
+    authUserId = userId; // Use token directly
+  }
+  
+  // SOLUTION 3: Try to create a new user ID if we have a token but no user ID
+  if (!authUserId && accessToken) {
+    try {
+      console.log('Creating new user ID for token');
+      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
+    } catch (storeError) {
+      console.error('Failed to create user ID:', storeError);
+      // Use token directly as fallback
+      authUserId = accessToken;
+      console.log('Using token directly as user ID (fallback)');
+    }
+  }
+  
+  // SOLUTION 4: Generate a temporary user ID if nothing else works
+  if (!authUserId) {
+    console.log('No user ID or token available, generating temporary ID');
+    authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
+    
+    // Store the temporary ID with empty credentials
+    // This allows at least some form of session continuity
+    try {
+      global.tempUsers = global.tempUsers || {};
+      global.tempUsers[authUserId] = {
+        created: new Date().toISOString()
+      };
+    } catch (tempError) {
+      console.error('Failed to store temporary user:', tempError);
+    }
+  }
+  
+  console.log(`Final user ID for finance transaction: ${authUserId}`);
+  
+  // Validate required fields
+  if (!spreadsheetId) {
+    console.error('Finance transaction failed: No spreadsheetId provided');
+    return res.status(400).json({ error: "spreadsheetId is required" });
+  }
+  
+  if (!data) {
+    console.error('Finance transaction failed: No data provided');
+    return res.status(400).json({ error: "data object is required" });
+  }
+  
+  try {
+    // SOLUTION 5: Direct token usage if it's a token
+    let token;
+    if (authUserId.startsWith('ya29.')) {
+      console.log('Using user ID directly as token');
+      token = authUserId;
+    } else if (accessToken) {
+      console.log('Using stored access token');
+      token = accessToken;
+    } else {
+      // Get a valid token for this user through normal means
+      console.log(`Getting token for user: ${authUserId}`);
+      token = await getValidTokenForUser(authUserId);
+    }
+    
+    console.log('Successfully obtained token for finance transaction');
+    
+    // Create OAuth client with the token
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({ access_token: token });
+    
+    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+    
+    // Process the financial data and update appropriate sheets
+    const result = await processFinancialData(sheets, spreadsheetId, data);
+    
+    console.log('Finance transaction processed successfully:', result);
+    res.json({ 
+      message: "Finance transaction processed successfully", 
+      transactionId: result.transactionId,
+      timestamp: result.timestamp,
+      results: result.results
+    });
+  } catch (error) {
+    console.error("Finance transaction error:", error);
+    
+    // Provide a more specific error message based on the error type
+    let errorMessage = "Failed to process finance transaction";
+    let statusCode = 500;
+    
+    if (error.message.includes('User not found')) {
+      errorMessage = "User not found or not authenticated";
+      statusCode = 401;
+    } else if (error.message.includes('invalid_grant')) {
+      errorMessage = "Authentication expired, please re-authenticate";
+      statusCode = 401;
+    } else if (error.code === 403 || error.message.includes('permission')) {
+      errorMessage = "Permission denied to access the spreadsheet";
+      statusCode = 403;
+    } else if (error.code === 404 || error.message.includes('not found')) {
+      errorMessage = "Spreadsheet not found";
+      statusCode = 404;
+    }
+    
+    res.status(statusCode).json({ 
+      error: errorMessage, 
+      details: error.message,
+      code: error.code || 'UNKNOWN'
+    });
+  }
+});
+
+// Update OpenAPI specification to include finance endpoints
 app.get('/openapi.json', (req, res) => {
   // Serve a static OpenAPI specification
   const openApiSpec = {
     "openapi": "3.1.0",
     "info": {
-      "title": "Chat Logger API",
-      "description": "API for logging and retrieving chat conversations with Google Sheets",
+      "title": "Finance Tracker API",
+      "description": "API for logging financial data and chat conversations with Google Sheets",
       "version": "1.0.0"
     },
     "servers": [
@@ -1060,6 +1551,127 @@ app.get('/openapi.json', (req, res) => {
             }
           },
           "required": ["spreadsheetId", "sheetName", "userMessage", "assistantResponse"]
+        },
+        "FinanceTransactionRequest": {
+          "type": "object",
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Google Spreadsheet ID"
+            },
+            "userId": {
+              "type": "string",
+              "description": "User ID for authentication"
+            },
+            "data": {
+              "type": "object",
+              "description": "Financial data to process",
+              "properties": {
+                "transaction": {
+                  "type": "object",
+                  "description": "Main transaction details",
+                  "properties": {
+                    "category": {
+                      "type": "string",
+                      "description": "Transaction category"
+                    },
+                    "subcategory": {
+                      "type": "string",
+                      "description": "Transaction subcategory"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "description": "Transaction amount"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Transaction type (Income or Expense)"
+                    },
+                    "paymentMethod": {
+                      "type": "string",
+                      "description": "Payment method used"
+                    },
+                    "notes": {
+                      "type": "string",
+                      "description": "Additional notes"
+                    }
+                  }
+                },
+                "groceryItems": {
+                  "type": "array",
+                  "description": "Itemized grocery receipt items",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "Item name"
+                      },
+                      "price": {
+                        "type": "string",
+                        "description": "Item price"
+                      }
+                    }
+                  }
+                },
+                "onlineTransaction": {
+                  "type": "object",
+                  "description": "Online purchase details",
+                  "properties": {
+                    "vendor": {
+                      "type": "string",
+                      "description": "Vendor name"
+                    },
+                    "item": {
+                      "type": "string",
+                      "description": "Item purchased"
+                    },
+                    "price": {
+                      "type": "string",
+                      "description": "Purchase price"
+                    }
+                  }
+                },
+                "creditUsage": {
+                  "type": "object",
+                  "description": "Credit card usage details",
+                  "properties": {
+                    "account": {
+                      "type": "string",
+                      "description": "Credit card account"
+                    },
+                    "creditLimit": {
+                      "type": "string",
+                      "description": "Credit limit"
+                    },
+                    "creditUsed": {
+                      "type": "string",
+                      "description": "Amount of credit used"
+                    }
+                  }
+                },
+                "tokenUsage": {
+                  "type": "object",
+                  "description": "API token usage details",
+                  "properties": {
+                    "tokensUsed": {
+                      "type": "string",
+                      "description": "Number of tokens used"
+                    },
+                    "estimatedCost": {
+                      "type": "string",
+                      "description": "Estimated cost of token usage"
+                    },
+                    "query": {
+                      "type": "string",
+                      "description": "Original query that generated the token usage"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": ["spreadsheetId", "data"]
         },
         "SheetDataRequest": {
           "type": "object",
@@ -1118,6 +1730,27 @@ app.get('/openapi.json', (req, res) => {
           "responses": {
             "200": {
               "description": "Successfully logged the conversation"
+            }
+          }
+        }
+      },
+      "/api/finance/log-transaction": {
+        "post": {
+          "summary": "Log financial transaction data",
+          "operationId": "logFinanceTransaction",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceTransactionRequest"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successfully processed financial transaction"
             }
           }
         }

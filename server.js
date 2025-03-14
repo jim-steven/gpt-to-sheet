@@ -259,13 +259,13 @@ const getTokensFromDB = async (userId) => {
     );
     
     if (result.rows.length > 0) {
-      const { access_token, refresh_token, token_expiry } = result.rows[0];
+    const { access_token, refresh_token, token_expiry } = result.rows[0];
       console.log('Found token in database');
-      return {
-        access_token,
-        refresh_token,
-        expiry_date: new Date(token_expiry).getTime()
-      };
+    return {
+      access_token,
+      refresh_token,
+      expiry_date: new Date(token_expiry).getTime()
+    };
     }
   } catch (dbError) {
     console.error('Database token retrieval failed:', dbError);
@@ -465,7 +465,7 @@ app.post('/oauth/token', async (req, res) => {
       console.log(`Generated userId ${userId} for this token`);
       
       // Format response properly for ChatGPT, including the userId
-      const formattedResponse = {
+    const formattedResponse = {
         access_token: tokenResponse.tokens.access_token,
         token_type: "bearer",
         refresh_token: tokenResponse.tokens.refresh_token,
@@ -769,7 +769,7 @@ app.get("/auth-success", (req, res) => {
         </div>
         
         <div>
-          <button id="copy-btn">Copy User ID</button>
+        <button id="copy-btn">Copy User ID</button>
           <button class="auto-close" id="close-btn">Close Window Now</button>
         </div>
         <p class="success" id="success-msg">User ID copied to clipboard!</p>
@@ -1085,15 +1085,15 @@ app.post("/api/log-data-v1", async (req, res) => {
     
     // Now append the data
     try {
-      const response = await sheets.spreadsheets.values.append({
-        spreadsheetId,
+    const response = await sheets.spreadsheets.values.append({
+      spreadsheetId,
         range: `${actualSheetName}!A:C`,
-        valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
-        },
-      });
-      
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
+      },
+    });
+    
       console.log('Data logged successfully!');
       res.json({ 
         message: "Data logged successfully!", 
@@ -1888,8 +1888,8 @@ app.get('/openapi.json', (req, res) => {
   const openApiSpec = {
     "openapi": "3.1.0",
     "info": {
-      "title": "Google Sheets Logger API",
-      "description": "API for logging chat conversations and financial data to Google Sheets",
+      "title": "Finance Tracker API",
+      "description": "API for logging financial data and chat conversations with Google Sheets",
       "version": "1.0.0"
     },
     "servers": [
@@ -1943,6 +1943,132 @@ app.get('/openapi.json', (req, res) => {
           },
           "required": ["spreadsheetId", "userMessage", "assistantResponse"]
         },
+        "GroceryItem": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Item name"
+            },
+            "price": {
+              "type": "string",
+              "description": "Item price"
+            }
+          },
+          "required": ["name", "price"]
+        },
+        "OnlineTransaction": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string",
+              "description": "Vendor name"
+            },
+            "item": {
+              "type": "string",
+              "description": "Item purchased"
+            },
+            "price": {
+              "type": "string",
+              "description": "Purchase price"
+            }
+          },
+          "required": ["vendor", "price"]
+        },
+        "CreditUsage": {
+          "type": "object",
+          "properties": {
+            "account": {
+              "type": "string",
+              "description": "Credit card account"
+            },
+            "creditLimit": {
+              "type": "string",
+              "description": "Credit limit"
+            },
+            "creditUsed": {
+              "type": "string",
+              "description": "Amount of credit used"
+            }
+          },
+          "required": ["account", "creditLimit", "creditUsed"]
+        },
+        "TokenUsage": {
+          "type": "object",
+          "properties": {
+            "tokensUsed": {
+              "type": "string",
+              "description": "Number of tokens used"
+            },
+            "estimatedCost": {
+              "type": "string",
+              "description": "Estimated cost of token usage"
+            },
+            "query": {
+              "type": "string",
+              "description": "Original query that generated the token usage"
+            }
+          },
+          "required": ["tokensUsed", "estimatedCost"]
+        },
+        "Transaction": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "description": "Transaction category"
+            },
+            "subcategory": {
+              "type": "string",
+              "description": "Transaction subcategory"
+            },
+            "amount": {
+              "type": "string",
+              "description": "Transaction amount"
+            },
+            "type": {
+              "type": "string",
+              "description": "Transaction type (Income or Expense)"
+            },
+            "paymentMethod": {
+              "type": "string",
+              "description": "Payment method used"
+            },
+            "notes": {
+              "type": "string",
+              "description": "Additional notes"
+            }
+          },
+          "required": ["category", "amount", "type"]
+        },
+        "FinanceData": {
+          "type": "object",
+          "properties": {
+            "transaction": {
+              "$ref": "#/components/schemas/Transaction"
+            },
+            "groceryItems": {
+              "type": "array",
+              "description": "Itemized grocery receipt items",
+              "items": {
+                "$ref": "#/components/schemas/GroceryItem"
+              }
+            },
+            "onlineTransaction": {
+              "$ref": "#/components/schemas/OnlineTransaction"
+            },
+            "creditUsage": {
+              "$ref": "#/components/schemas/CreditUsage"
+            },
+            "tokenUsage": {
+              "$ref": "#/components/schemas/TokenUsage"
+            },
+            "store": {
+              "type": "string",
+              "description": "Store name for grocery receipts"
+            }
+          }
+        },
         "FinanceTransactionRequest": {
           "type": "object",
           "properties": {
@@ -1955,111 +2081,20 @@ app.get('/openapi.json', (req, res) => {
               "description": "User ID for authentication"
             },
             "data": {
-              "type": "object",
-              "description": "Financial data to process",
-              "properties": {
-                "transaction": {
-                  "type": "object",
-                  "description": "Main transaction details",
-                  "properties": {
-                    "category": {
-                      "type": "string",
-                      "description": "Transaction category"
-                    },
-                    "subcategory": {
-                      "type": "string",
-                      "description": "Transaction subcategory"
-                    },
-                    "amount": {
-                      "type": "string",
-                      "description": "Transaction amount"
-                    },
-                    "type": {
-                      "type": "string",
-                      "description": "Transaction type (Income or Expense)"
-                    },
-                    "paymentMethod": {
-                      "type": "string",
-                      "description": "Payment method used"
-                    },
-                    "notes": {
-                      "type": "string",
-                      "description": "Additional notes"
-                    }
-                  }
-                },
-                "groceryItems": {
-                  "type": "array",
-                  "description": "Itemized grocery receipt items",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "name": {
-                        "type": "string",
-                        "description": "Item name"
-                      },
-                      "price": {
-                        "type": "string",
-                        "description": "Item price"
-                      }
-                    }
-                  }
-                },
-                "onlineTransaction": {
-                  "type": "object",
-                  "description": "Online purchase details",
-                  "properties": {
-                    "vendor": {
-                      "type": "string",
-                      "description": "Vendor name"
-                    },
-                    "item": {
-                      "type": "string",
-                      "description": "Item purchased"
-                    },
-                    "price": {
-                      "type": "string",
-                      "description": "Purchase price"
-                    }
-                  }
-                },
-                "creditUsage": {
-                  "type": "object",
-                  "description": "Credit card usage details",
-                  "properties": {
-                    "account": {
-                      "type": "string",
-                      "description": "Credit card account"
-                    },
-                    "creditLimit": {
-                      "type": "string",
-                      "description": "Credit limit"
-                    },
-                    "creditUsed": {
-                      "type": "string",
-                      "description": "Amount of credit used"
-                    }
-                  }
-                },
-                "tokenUsage": {
-                  "type": "object",
-                  "description": "API token usage details",
-                  "properties": {
-                    "tokensUsed": {
-                      "type": "string",
-                      "description": "Number of tokens used"
-                    },
-                    "estimatedCost": {
-                      "type": "string",
-                      "description": "Estimated cost of token usage"
-                    },
-                    "query": {
-                      "type": "string",
-                      "description": "Original query that generated the token usage"
-                    }
-                  }
-                }
-              }
+              "$ref": "#/components/schemas/FinanceData"
+            }
+          },
+          "required": ["spreadsheetId", "data"]
+        },
+        "ChatGPTTransactionRequest": {
+          "type": "object",
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Google Spreadsheet ID"
+            },
+            "data": {
+              "$ref": "#/components/schemas/FinanceData"
             }
           },
           "required": ["spreadsheetId", "data"]
@@ -2081,6 +2116,24 @@ app.get('/openapi.json', (req, res) => {
             }
           },
           "required": ["spreadsheetId"]
+        },
+        "SetupSheetsRequest": {
+          "type": "object",
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Google Spreadsheet ID"
+            },
+            "userId": {
+              "type": "string",
+              "description": "User ID for authentication"
+            },
+            "email": {
+              "type": "string",
+              "description": "User email to associate with spreadsheet"
+            }
+          },
+          "required": ["spreadsheetId"]
         }
       },
       "securitySchemes": {
@@ -2098,11 +2151,6 @@ app.get('/openapi.json', (req, res) => {
         }
       }
     },
-    "security": [
-      {
-        "oauth2": ["https://www.googleapis.com/auth/spreadsheets"]
-      }
-    ],
     "paths": {
       "/api/log-data-v1": {
         "post": {
@@ -2130,6 +2178,7 @@ app.get('/openapi.json', (req, res) => {
           "summary": "Log chat conversation (ChatGPT simplified endpoint)",
           "operationId": "logChatGPT",
           "description": "Simplified endpoint for ChatGPT to log conversations without OAuth",
+          "security": [],
           "requestBody": {
             "required": true,
             "content": {
@@ -2142,7 +2191,26 @@ app.get('/openapi.json', (req, res) => {
           },
           "responses": {
             "200": {
-              "description": "Successfully logged the conversation"
+              "description": "Successfully logged the conversation",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "message": {
+                        "type": "string",
+                        "description": "Success message"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Bad request - missing required fields"
+            },
+            "500": {
+              "description": "Server error"
             }
           }
         }
@@ -2152,6 +2220,7 @@ app.get('/openapi.json', (req, res) => {
           "summary": "Get a temporary user ID for ChatGPT",
           "operationId": "getChatGPTUserId",
           "description": "Creates a temporary user ID for ChatGPT to use with other endpoints",
+          "security": [],
           "responses": {
             "200": {
               "description": "Successfully created a temporary user ID",
@@ -2165,12 +2234,62 @@ app.get('/openapi.json', (req, res) => {
                         "description": "Temporary user ID"
                       },
                       "message": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Success message"
                       }
                     }
                   }
                 }
               }
+            },
+            "500": {
+              "description": "Server error"
+            }
+          }
+        }
+      },
+      "/api/chatgpt/log-transaction": {
+        "post": {
+          "summary": "Log financial transaction (ChatGPT simplified endpoint)",
+          "operationId": "logTransactionChatGPT",
+          "description": "Simplified endpoint for ChatGPT to log financial transactions without OAuth",
+          "security": [],
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatGPTTransactionRequest"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successfully logged the transaction",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "message": {
+                        "type": "string",
+                        "description": "Success message"
+                      },
+                      "transactionId": {
+                        "type": "string",
+                        "description": "Unique transaction ID"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Bad request - missing required fields"
+            },
+            "500": {
+              "description": "Server error"
             }
           }
         }
@@ -2192,6 +2311,27 @@ app.get('/openapi.json', (req, res) => {
           "responses": {
             "200": {
               "description": "Successfully processed financial transaction"
+            }
+          }
+        }
+      },
+      "/api/finance/setup-sheets": {
+        "post": {
+          "summary": "Setup all required finance sheets",
+          "operationId": "setupFinanceSheets",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupSheetsRequest"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successfully set up finance sheets"
             }
           }
         }
@@ -2219,35 +2359,49 @@ app.get('/openapi.json', (req, res) => {
       },
       "/auth/check-session": {
         "get": {
-          "summary": "Check if a recent authentication exists",
-          "operationId": "checkAuthSession",
+          "summary": "Check if user is authenticated",
+          "operationId": "checkSession",
           "parameters": [
             {
-              "name": "session",
+              "name": "userId",
               "in": "query",
               "required": false,
               "schema": {
                 "type": "string"
-              },
-              "description": "Session identifier (optional)"
+              }
             }
           ],
           "responses": {
             "200": {
-              "description": "Authentication check successful",
+              "description": "Authentication status and user preferences"
+            }
+          }
+        }
+      },
+      "/api/plugin/check": {
+        "get": {
+          "summary": "Check if the plugin is working",
+          "operationId": "checkPlugin",
+          "security": [],
+          "responses": {
+            "200": {
+              "description": "Plugin status",
               "content": {
                 "application/json": {
                   "schema": {
                     "type": "object",
                     "properties": {
-                      "authenticated": {
-                        "type": "boolean"
-                      },
-                      "userId": {
-                        "type": "string"
+                      "status": {
+                        "type": "string",
+                        "description": "Status of the plugin"
                       },
                       "message": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Status message"
+                      },
+                      "timestamp": {
+                        "type": "string",
+                        "description": "Current timestamp"
                       }
                     }
                   }
@@ -2529,19 +2683,12 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
   
   const manifest = {
     "schema_version": "v1",
-    "name_for_human": "Google Sheets Logger",
-    "name_for_model": "google_sheets_logger",
-    "description_for_human": "Log conversations and financial data to Google Sheets.",
-    "description_for_model": "Plugin to log conversations and financial data to Google Sheets. Helps users track finances, budgets, and keep records of important conversations.",
+    "name_for_human": "Finance Tracker & Sheet Logger",
+    "name_for_model": "finance_tracker",
+    "description_for_human": "Track finances and log conversations to Google Sheets. Manage budgets, expenses, and keep records of important financial data.",
+    "description_for_model": "This plugin helps users track financial data and log conversations to Google Sheets. It can log transactions, track budgets, categorize expenses, and store itemized receipts. It also provides a way to log chat conversations for future reference.",
     "auth": {
-      "type": "oauth",
-      "client_url": `${baseUrl}/oauth/authorize`,
-      "scope": "https://www.googleapis.com/auth/spreadsheets",
-      "authorization_url": `${baseUrl}/oauth/token`,
-      "authorization_content_type": "application/json",
-      "verification_tokens": {
-        "openai": process.env.OPENAI_VERIFICATION_TOKEN || "default-openai-token"
-      }
+      "type": "none"
     },
     "api": {
       "type": "openapi",
@@ -2629,9 +2776,6 @@ app.post('/api/chatgpt/log-conversation', async (req, res) => {
     return res.status(400).json({ error: "userMessage and assistantResponse are required" });
   }
   
-  // Generate a temporary user ID
-  const tempUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
-  
   try {
     // Create OAuth client directly with environment variables
     const oauth2Client = new google.auth.OAuth2(
@@ -2640,13 +2784,23 @@ app.post('/api/chatgpt/log-conversation', async (req, res) => {
       process.env.GOOGLE_REDIRECT_URI
     );
     
-    // Use client credentials flow for this simplified endpoint
-    const response = await oauth2Client.getAccessToken();
-    const token = response.token;
-    
-    if (!token) {
-      console.error('Failed to get access token using client credentials');
-      return res.status(401).json({ error: "Authentication failed" });
+    // Use service account if available, otherwise try client credentials
+    let token;
+    try {
+      // Try to use client credentials flow
+      const response = await oauth2Client.getAccessToken();
+      token = response.token;
+      
+      if (!token) {
+        throw new Error('No token from client credentials');
+      }
+    } catch (authError) {
+      console.error('Client credentials auth failed:', authError);
+      
+      // Fall back to a temporary token for demo purposes
+      // In production, you should use proper authentication
+      token = 'temporary_token_for_demo';
+      console.log('Using temporary token for demo purposes');
     }
     
     oauth2Client.setCredentials({ access_token: token });
@@ -2706,8 +2860,7 @@ app.post('/api/chatgpt/log-conversation', async (req, res) => {
     console.log('Data logged successfully!');
     res.json({ 
       message: "Data logged successfully!", 
-      response: appendResponse.data,
-      userId: tempUserId
+      response: appendResponse.data
     });
   } catch (error) {
     console.error("Logging error:", error);
@@ -2730,6 +2883,93 @@ app.post('/api/chatgpt/log-conversation', async (req, res) => {
     });
   }
 });
+
+// Add a simplified finance transaction endpoint for ChatGPT
+app.post('/api/chatgpt/log-transaction', async (req, res) => {
+  console.log('ChatGPT log-transaction request received');
+  
+  const { spreadsheetId, data } = req.body;
+  
+  if (!spreadsheetId) {
+    console.error('Log attempt failed: No spreadsheetId provided');
+    return res.status(400).json({ error: "spreadsheetId is required" });
+  }
+  
+  if (!data) {
+    console.error('Log attempt failed: No transaction data provided');
+    return res.status(400).json({ error: "data is required" });
+  }
+  
+  try {
+    // Create OAuth client directly with environment variables
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+    
+    // Use service account if available, otherwise try client credentials
+    let token;
+    try {
+      // Try to use client credentials flow
+      const response = await oauth2Client.getAccessToken();
+      token = response.token;
+      
+      if (!token) {
+        throw new Error('No token from client credentials');
+      }
+    } catch (authError) {
+      console.error('Client credentials auth failed:', authError);
+      
+      // Fall back to a temporary token for demo purposes
+      // In production, you should use proper authentication
+      token = 'temporary_token_for_demo';
+      console.log('Using temporary token for demo purposes');
+    }
+    
+    oauth2Client.setCredentials({ access_token: token });
+    
+    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+    
+    // Setup all required sheets
+    await setupFinanceSheets(sheets, spreadsheetId);
+    
+    // Process the financial data
+    const result = await processFinancialData(sheets, spreadsheetId, data);
+    
+    console.log('Transaction logged successfully!');
+    res.json({ 
+      message: "Transaction logged successfully!", 
+      transactionId: result.transactionId,
+      timestamp: result.timestamp,
+      results: result.results
+    });
+  } catch (error) {
+    console.error("Transaction logging error:", error);
+    
+    let errorMessage = "Failed to log transaction";
+    let statusCode = 500;
+    
+    if (error.code === 403 || error.message.includes('permission')) {
+      errorMessage = "Permission denied to access the spreadsheet";
+      statusCode = 403;
+    } else if (error.code === 404 || error.message.includes('not found')) {
+      errorMessage = "Spreadsheet not found";
+      statusCode = 404;
+    }
+    
+    res.status(statusCode).json({ 
+      error: errorMessage, 
+      details: error.message,
+      code: error.code || 'UNKNOWN'
+    });
+  }
+});
+
+// Add a helper function to generate transaction IDs
+const generateTransactionId = () => {
+  return `tx_${crypto.randomBytes(8).toString('hex')}`;
+};
 
 // Create public directory if it doesn't exist
 const publicDir = path.join(__dirname, 'public');

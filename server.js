@@ -1879,17 +1879,22 @@ const processFinancialData = async (sheets, spreadsheetId, data) => {
 
 // Update OpenAPI specification to include finance endpoints
 app.get('/openapi.json', (req, res) => {
+  // Get the host from the request
+  const host = req.get('host');
+  const protocol = req.protocol;
+  const baseUrl = `${protocol}://${host}`;
+  
   // Serve a static OpenAPI specification
   const openApiSpec = {
     "openapi": "3.1.0",
     "info": {
-      "title": "Finance Tracker API",
-      "description": "API for logging financial data and chat conversations with Google Sheets",
+      "title": "Google Sheets Logger API",
+      "description": "API for logging chat conversations and financial data to Google Sheets",
       "version": "1.0.0"
     },
     "servers": [
       {
-        "url": "https://gpt-to-sheet.onrender.com"
+        "url": baseUrl
       }
     ],
     "components": {
@@ -1918,7 +1923,25 @@ app.get('/openapi.json', (req, res) => {
               "description": "ISO timestamp of the conversation"
             }
           },
-          "required": ["spreadsheetId", "sheetName", "userMessage", "assistantResponse"]
+          "required": ["spreadsheetId", "userMessage", "assistantResponse"]
+        },
+        "ChatGPTLogRequest": {
+          "type": "object",
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Google Spreadsheet ID"
+            },
+            "userMessage": {
+              "type": "string",
+              "description": "Message from the user"
+            },
+            "assistantResponse": {
+              "type": "string",
+              "description": "Response from the assistant"
+            }
+          },
+          "required": ["spreadsheetId", "userMessage", "assistantResponse"]
         },
         "FinanceTransactionRequest": {
           "type": "object",
@@ -2065,8 +2088,8 @@ app.get('/openapi.json', (req, res) => {
           "type": "oauth2",
           "flows": {
             "authorizationCode": {
-              "authorizationUrl": "https://gpt-to-sheet.onrender.com/oauth/authorize",
-              "tokenUrl": "https://gpt-to-sheet.onrender.com/oauth/token",
+              "authorizationUrl": `${baseUrl}/oauth/authorize`,
+              "tokenUrl": `${baseUrl}/oauth/token`,
               "scopes": {
                 "https://www.googleapis.com/auth/spreadsheets": "Read and write access to Google Sheets"
               }
@@ -2098,6 +2121,56 @@ app.get('/openapi.json', (req, res) => {
           "responses": {
             "200": {
               "description": "Successfully logged the conversation"
+            }
+          }
+        }
+      },
+      "/api/chatgpt/log-conversation": {
+        "post": {
+          "summary": "Log chat conversation (ChatGPT simplified endpoint)",
+          "operationId": "logChatGPT",
+          "description": "Simplified endpoint for ChatGPT to log conversations without OAuth",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatGPTLogRequest"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successfully logged the conversation"
+            }
+          }
+        }
+      },
+      "/api/chatgpt/get-user-id": {
+        "post": {
+          "summary": "Get a temporary user ID for ChatGPT",
+          "operationId": "getChatGPTUserId",
+          "description": "Creates a temporary user ID for ChatGPT to use with other endpoints",
+          "responses": {
+            "200": {
+              "description": "Successfully created a temporary user ID",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string",
+                        "description": "Temporary user ID"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -2140,34 +2213,6 @@ app.get('/openapi.json', (req, res) => {
           "responses": {
             "200": {
               "description": "Successfully retrieved sheet data"
-            }
-          }
-        }
-      },
-      "/get-user-id": {
-        "get": {
-          "summary": "Get user ID for an authenticated session",
-          "operationId": "getUserId",
-          "security": [{ "oauth2": ["https://www.googleapis.com/auth/spreadsheets"] }],
-          "responses": {
-            "200": {
-              "description": "Successfully retrieved user ID",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "type": "object",
-                    "properties": {
-                      "user_id": {
-                        "type": "string",
-                        "description": "User ID to use with other API endpoints"
-                      },
-                      "message": {
-                        "type": "string"
-                      }
-                    }
-                  }
-                }
-              }
             }
           }
         }
@@ -2475,4 +2520,231 @@ app.get('/api/plugin/get-user-id', async (req, res) => {
     });
   }
 });
+
+// Add a ChatGPT-specific plugin manifest endpoint
+app.get('/.well-known/ai-plugin.json', (req, res) => {
+  const host = req.get('host');
+  const protocol = req.protocol;
+  const baseUrl = `${protocol}://${host}`;
+  
+  const manifest = {
+    "schema_version": "v1",
+    "name_for_human": "Google Sheets Logger",
+    "name_for_model": "google_sheets_logger",
+    "description_for_human": "Log conversations and financial data to Google Sheets.",
+    "description_for_model": "Plugin to log conversations and financial data to Google Sheets. Helps users track finances, budgets, and keep records of important conversations.",
+    "auth": {
+      "type": "oauth",
+      "client_url": `${baseUrl}/oauth/authorize`,
+      "scope": "https://www.googleapis.com/auth/spreadsheets",
+      "authorization_url": `${baseUrl}/oauth/token`,
+      "authorization_content_type": "application/json",
+      "verification_tokens": {
+        "openai": process.env.OPENAI_VERIFICATION_TOKEN || "default-openai-token"
+      }
+    },
+    "api": {
+      "type": "openapi",
+      "url": `${baseUrl}/openapi.json`
+    },
+    "logo_url": `${baseUrl}/logo.png`,
+    "contact_email": "support@example.com",
+    "legal_info_url": `${baseUrl}/legal`
+  };
+  
+  res.json(manifest);
+});
+
+// Add a simple logo endpoint
+app.get('/logo.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'logo.png'));
+});
+
+// Add a legal info page
+app.get('/legal', (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>Legal Information</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        </style>
+      </head>
+      <body>
+        <h1>Legal Information</h1>
+        <p>This service is provided for demonstration purposes.</p>
+        <p>By using this service, you agree to Google's Terms of Service for the Google Sheets API.</p>
+      </body>
+    </html>
+  `);
+});
+
+// Add a specific endpoint for ChatGPT to get a user ID directly
+app.post('/api/chatgpt/get-user-id', async (req, res) => {
+  console.log('ChatGPT get-user-id request received:', {
+    headers: {
+      authorization: req.headers.authorization ? 'Bearer [REDACTED]' : undefined,
+      'content-type': req.headers['content-type']
+    },
+    body: req.body
+  });
+  
+  // Generate a temporary user ID if nothing else works
+  const tempUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
+  
+  try {
+    global.tempUsers = global.tempUsers || {};
+    global.tempUsers[tempUserId] = {
+      created: new Date().toISOString()
+    };
+    
+    console.log(`Created temporary user ID: ${tempUserId}`);
+    
+    return res.json({
+      userId: tempUserId,
+      message: 'Temporary user ID created successfully'
+    });
+  } catch (error) {
+    console.error('Error creating temporary user ID:', error);
+    return res.status(500).json({ 
+      error: 'Failed to create user ID',
+      message: error.message
+    });
+  }
+});
+
+// Add a simplified logging endpoint specifically for ChatGPT
+app.post('/api/chatgpt/log-conversation', async (req, res) => {
+  console.log('ChatGPT log-conversation request received');
+  
+  const { spreadsheetId, userMessage, assistantResponse } = req.body;
+  
+  if (!spreadsheetId) {
+    console.error('Log attempt failed: No spreadsheetId provided');
+    return res.status(400).json({ error: "spreadsheetId is required" });
+  }
+  
+  if (!userMessage || !assistantResponse) {
+    console.error('Log attempt failed: Missing message content');
+    return res.status(400).json({ error: "userMessage and assistantResponse are required" });
+  }
+  
+  // Generate a temporary user ID
+  const tempUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
+  
+  try {
+    // Create OAuth client directly with environment variables
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+    
+    // Use client credentials flow for this simplified endpoint
+    const response = await oauth2Client.getAccessToken();
+    const token = response.token;
+    
+    if (!token) {
+      console.error('Failed to get access token using client credentials');
+      return res.status(401).json({ error: "Authentication failed" });
+    }
+    
+    oauth2Client.setCredentials({ access_token: token });
+    
+    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+    const sheetName = "Data"; // Default to "Data"
+    
+    console.log(`Writing to sheet "${sheetName}" in spreadsheet "${spreadsheetId}"`);
+    
+    // First check if the sheet exists, create it if it doesn't
+    try {
+      await sheets.spreadsheets.get({
+        spreadsheetId,
+        ranges: [`${sheetName}!A1`]
+      });
+      console.log(`Sheet "${sheetName}" exists`);
+    } catch (sheetError) {
+      if (sheetError.code === 404 || sheetError.message.includes('not found')) {
+        console.log(`Sheet "${sheetName}" doesn't exist, creating it`);
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          resource: {
+            requests: [{
+              addSheet: {
+                properties: {
+                  title: sheetName
+                }
+              }
+            }]
+          }
+        });
+        
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${sheetName}!A1:C1`,
+          valueInputOption: "USER_ENTERED",
+          resource: {
+            values: [["User Message", "Assistant Response", "Timestamp"]]
+          }
+        });
+        console.log(`Created sheet "${sheetName}" with headers`);
+      } else {
+        throw sheetError;
+      }
+    }
+    
+    // Now append the data
+    const appendResponse = await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${sheetName}!A:C`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[userMessage, assistantResponse, new Date().toISOString()]],
+      },
+    });
+    
+    console.log('Data logged successfully!');
+    res.json({ 
+      message: "Data logged successfully!", 
+      response: appendResponse.data,
+      userId: tempUserId
+    });
+  } catch (error) {
+    console.error("Logging error:", error);
+    
+    let errorMessage = "Failed to write to sheet";
+    let statusCode = 500;
+    
+    if (error.code === 403 || error.message.includes('permission')) {
+      errorMessage = "Permission denied to access the spreadsheet";
+      statusCode = 403;
+    } else if (error.code === 404 || error.message.includes('not found')) {
+      errorMessage = "Spreadsheet not found";
+      statusCode = 404;
+    }
+    
+    res.status(statusCode).json({ 
+      error: errorMessage, 
+      details: error.message,
+      code: error.code || 'UNKNOWN'
+    });
+  }
+});
+
+// Create public directory if it doesn't exist
+const publicDir = path.join(__dirname, 'public');
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
+  console.log('Created public directory');
+}
+
+// Create a simple logo file if it doesn't exist
+const logoPath = path.join(publicDir, 'logo.png');
+if (!fs.existsSync(logoPath)) {
+  // This is a very simple 1x1 pixel PNG file (base64 encoded)
+  const logoBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAACXBIWXMAAAsTAAALEwEAmpwYAAABFUlEQVR42u3BMQEAAADCoPVP7WsIoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeAMBPAAB9RbmzwAAAABJRU5ErkJggg==';
+  const logoBuffer = Buffer.from(logoBase64, 'base64');
+  fs.writeFileSync(logoPath, logoBuffer);
+  console.log('Created default logo.png');
+}
 

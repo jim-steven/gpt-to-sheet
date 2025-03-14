@@ -80,4 +80,16 @@ try {
   console.error('File system test failed:', error.message);
 }
 
+console.log('Environment variables check:');
+const requiredVars = [
+  'PORT', 
+  'NODE_ENV', 
+  'GOOGLE_CLIENT_ID', 
+  'GOOGLE_CLIENT_SECRET',
+  'GOOGLE_REDIRECT_URI'
+];
+requiredVars.forEach(varName => {
+  console.log(`${varName}: ${process.env[varName] ? 'Set ✓' : 'MISSING ✗'}`);
+});
+
 module.exports = router;

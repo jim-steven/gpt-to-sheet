@@ -356,7 +356,18 @@ const generateUserId = () => {
 // OAuth proxy endpoints for GPT integration
 app.get('/oauth/authorize', (req, res) => {
   const params = new URLSearchParams(req.query);
+  console.log('OAuth authorize request received with params:', params.toString());
+  
+  // Log the redirect_uri to check if it's properly set
+  console.log('Redirect URI:', params.get('redirect_uri'));
+  
+  // Check if state parameter is present (needed for ChatGPT plugin flow)
+  if (!params.get('state')) {
+    console.log('Warning: No state parameter in OAuth request');
+  }
+  
   const googleAuthUrl = `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
+  console.log('Redirecting to Google OAuth URL:', googleAuthUrl);
   res.redirect(googleAuthUrl);
 });
 
@@ -386,8 +397,16 @@ app.post('/oauth/token', async (req, res) => {
       code,
       redirect_uri,
       client_id,
-      client_secret
+      client_secret,
+      state
     } = params;
+    
+    // Log state parameter which is important for ChatGPT plugin flow
+    if (state) {
+      console.log('State parameter present:', state);
+    } else {
+      console.log('Warning: No state parameter in token request');
+    }
     
     // Assume authorization_code if no grant_type specified (helps with ChatGPT integration)
     const effectiveGrantType = grant_type || (code ? 'authorization_code' : 'refresh_token');
@@ -404,12 +423,22 @@ app.post('/oauth/token', async (req, res) => {
     // Handle different grant types
     if (effectiveGrantType === 'authorization_code') {
       if (!code) {
+        console.error('Error: code is required for authorization_code grant type');
         return res.status(400).json({ error: 'code is required for authorization_code grant type' });
       }
       
       // Exchange authorization code for tokens
-      tokenResponse = await oauth2Client.getToken(code);
-      console.log('Got token response:', JSON.stringify(tokenResponse));
+      try {
+        tokenResponse = await oauth2Client.getToken(code);
+        console.log('Got token response:', JSON.stringify(tokenResponse));
+      } catch (tokenError) {
+        console.error('Error getting token from Google:', tokenError);
+        return res.status(400).json({ 
+          error: 'Failed to exchange authorization code', 
+          details: tokenError.message,
+          code: tokenError.code || 'UNKNOWN'
+        });
+      }
       
       // Ensure we have a refresh token by requesting offline access
       if (!tokenResponse.tokens.refresh_token) {
@@ -417,11 +446,16 @@ app.post('/oauth/token', async (req, res) => {
       }
       
       // Store the tokens and generate a user ID
-      const userId = await storeAccessToken(
-        tokenResponse.tokens.access_token,
-        tokenResponse.tokens.refresh_token,
-        tokenResponse.tokens.expiry_date
-      );
+      let userId;
+      try {
+        userId = await storeAccessToken(
+          tokenResponse.tokens.access_token,
+          tokenResponse.tokens.refresh_token,
+          tokenResponse.tokens.expiry_date
+        );
+      } catch (storeError) {
+        console.error('Error storing tokens:', storeError);
+      }
       
       if (!userId) {
         console.error('Failed to store tokens and generate userId');
@@ -441,9 +475,11 @@ app.post('/oauth/token', async (req, res) => {
       
       console.log('Token exchange successful - formatted response:', formattedResponse);
       return res.json(formattedResponse);
-      
-    } else if (effectiveGrantType === 'refresh_token') {
+    } 
+    
+    if (effectiveGrantType === 'refresh_token') {
       if (!params.refresh_token) {
+        console.error('Error: refresh_token is required for refresh_token grant type');
         return res.status(400).json({ error: 'refresh_token is required for refresh_token grant type' });
       }
       
@@ -451,7 +487,17 @@ app.post('/oauth/token', async (req, res) => {
       oauth2Client.setCredentials({
         refresh_token: params.refresh_token
       });
-      tokenResponse = await oauth2Client.refreshAccessToken();
+      
+      try {
+        tokenResponse = await oauth2Client.refreshAccessToken();
+      } catch (refreshError) {
+        console.error('Error refreshing token:', refreshError);
+        return res.status(400).json({ 
+          error: 'Failed to refresh token', 
+          details: refreshError.message,
+          code: refreshError.code || 'UNKNOWN'
+        });
+      }
       
       // Update the stored tokens with the same user ID
       const userId = await getUserIdByAccessToken(params.access_token);
@@ -462,7 +508,8 @@ app.post('/oauth/token', async (req, res) => {
           tokenResponse.tokens.expiry_date
         );
       }
-    } else {
+    } else if (effectiveGrantType !== 'authorization_code') {
+      console.error('Error: Invalid or missing grant_type:', effectiveGrantType);
       return res.status(400).json({ error: 'Invalid or missing grant_type' });
     }
     
@@ -524,12 +571,40 @@ app.get("/auth/sso", (req, res) => {
 
 // Auth callback that stores tokens, email, and returns user ID
 app.get("/auth/callback", async (req, res) => {
-  const { code, state } = req.query;
+  console.log('Auth callback received with query params:', req.query);
+  
+  const { code, state, error } = req.query;
+  
+  // Check for OAuth errors
+  if (error) {
+    console.error('OAuth error returned in callback:', error, req.query.error_description);
+    return res.redirect(`/auth-error?error=${encodeURIComponent(error)}&description=${encodeURIComponent(req.query.error_description || '')}`);
+  }
+  
+  if (!code) {
+    console.error('No authorization code in callback');
+    return res.redirect('/auth-error?error=no_code&description=No+authorization+code+received');
+  }
+  
+  if (!state) {
+    console.warn('No state parameter in callback - this may cause issues with ChatGPT plugin flow');
+  }
+  
   const userId = state; // Retrieve user ID from state
+  console.log(`Using state as userId: ${userId}`);
   
   try {
     const oauth2Client = createOAuth2Client();
-    const { tokens } = await oauth2Client.getToken(code);
+    
+    let tokens;
+    try {
+      const tokenResponse = await oauth2Client.getToken(code);
+      tokens = tokenResponse.tokens;
+      console.log('Successfully exchanged code for tokens');
+    } catch (tokenError) {
+      console.error('Error exchanging code for tokens:', tokenError);
+      return res.redirect(`/auth-error?error=token_exchange&description=${encodeURIComponent(tokenError.message)}`);
+    }
     
     // Get user email from Google API
     let userEmail = null;
@@ -558,6 +633,7 @@ app.get("/auth/callback", async (req, res) => {
       created: new Date().toISOString()
     };
     saveUsers(users);
+    console.log(`Saved user ${userId} to file storage`);
     
     // For SSO flow, store in session and cookie
     if (req.session.userId === userId) {
@@ -568,6 +644,7 @@ app.get("/auth/callback", async (req, res) => {
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
       });
+      console.log(`Set cookie for SSO user ${userId}`);
       
       // Store tokens in database for SSO
       try {
@@ -582,6 +659,7 @@ app.get("/auth/callback", async (req, res) => {
             userEmail
           ]
         );
+        console.log(`Stored tokens in database for user ${userId}`);
       } catch (dbError) {
         console.error('Database error storing tokens:', dbError);
       }
@@ -590,8 +668,40 @@ app.get("/auth/callback", async (req, res) => {
     // Redirect to success page with user ID
     res.redirect(`/auth-success?userId=${userId}&email=${encodeURIComponent(userEmail || '')}`);
   } catch (error) {
-    res.status(500).json({ error: "Authentication failed", details: error.message });
+    console.error('Authentication callback error:', error);
+    res.redirect(`/auth-error?error=general&description=${encodeURIComponent(error.message)}`);
   }
+});
+
+// Add an error page for authentication failures
+app.get("/auth-error", (req, res) => {
+  const error = req.query.error || 'unknown';
+  const description = req.query.description || 'An unknown error occurred during authentication';
+  
+  res.send(`
+    <html>
+      <head>
+        <title>Authentication Error</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+          .error-box { background: #ffebee; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #f44336; }
+          .button { background: #4285f4; color: white; border: none; padding: 10px 15px; border-radius: 5px; text-decoration: none; display: inline-block; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <h1>Authentication Failed ❌</h1>
+        
+        <div class="error-box">
+          <h3>Error: ${error}</h3>
+          <p>${description}</p>
+        </div>
+        
+        <p>Please try again or contact support if the issue persists.</p>
+        
+        <a href="/" class="button">Return to Home</a>
+      </body>
+    </html>
+  `);
 });
 
 // Route to check authentication status for SSO users
@@ -709,7 +819,7 @@ const getValidTokenForUser = async (userId) => {
   
   // Special case: If userId looks like an access token (starts with ya29.), return it directly
   if (userId.startsWith('ya29.')) {
-    console.log(`User ID appears to be a token, returning it directly`);
+    console.log('User ID appears to be a token, returning it directly');
     return userId;
   }
   
@@ -725,7 +835,7 @@ const getValidTokenForUser = async (userId) => {
     const users = readUsers();
     const user = users[userId];
     
-    if (!user || !user.tokens) {
+    if (!user?.tokens) {
       console.error(`User ${userId} not found in file storage either!`);
       throw new Error("User not found or not authenticated");
     }
@@ -788,22 +898,28 @@ const getValidTokenForUser = async (userId) => {
 };
 // Simplified endpoint to log data with userId - with multiple fallback mechanisms
 app.post("/api/log-data-v1", async (req, res) => {
-  const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp, userId } = req.body;
-  
-  console.log('Logging request received:', {
-    spreadsheetId,
-    sheetName,
-    userId,
-    messageLength: userMessage?.length,
-    responseLength: assistantResponse?.length
+  console.log('Log data request received:', {
+    headers: {
+      authorization: req.headers.authorization ? 'Bearer [REDACTED]' : undefined,
+      'content-type': req.headers['content-type']
+    },
+    body: {
+      spreadsheetId: req.body.spreadsheetId,
+      sheetName: req.body.sheetName,
+      userId: req.body.userId,
+      messageLength: req.body.userMessage?.length,
+      responseLength: req.body.assistantResponse?.length
+    }
   });
+
+  const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp, userId } = req.body;
   
   let authUserId = userId;
   let accessToken = null;
   
   // SOLUTION 1: Check for Authorization header (Bearer token)
   const authHeader = req.get('Authorization');
-  if (authHeader && authHeader.startsWith('Bearer ')) {
+  if (authHeader?.startsWith('Bearer ')) {
     accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
     console.log('Got Bearer token from Authorization header');
     
@@ -845,7 +961,7 @@ app.post("/api/log-data-v1", async (req, res) => {
   // SOLUTION 4: Generate a temporary user ID if nothing else works
   if (!authUserId) {
     console.log('No user ID or token available, generating temporary ID');
-    authUserId = 'temp_' + crypto.randomBytes(8).toString('hex');
+    authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
     
     // Store the temporary ID with empty credentials
     // This allows at least some form of session continuity
@@ -884,7 +1000,16 @@ app.post("/api/log-data-v1", async (req, res) => {
     } else {
       // Get a valid token for this user through normal means
       console.log(`Getting token for user: ${authUserId}`);
-      token = await getValidTokenForUser(authUserId);
+      try {
+        token = await getValidTokenForUser(authUserId);
+      } catch (tokenError) {
+        console.error(`Error getting token for user ${authUserId}:`, tokenError);
+        return res.status(401).json({ 
+          error: "Authentication failed", 
+          details: tokenError.message,
+          code: 'AUTH_ERROR'
+        });
+      }
     }
     
     console.log('Successfully obtained token for request');
@@ -907,32 +1032,51 @@ app.post("/api/log-data-v1", async (req, res) => {
       });
       console.log(`Sheet "${actualSheetName}" exists`);
     } catch (sheetError) {
+      console.log('Sheet error:', sheetError.message);
+      
       if (sheetError.code === 404 || sheetError.message.includes('not found')) {
         // Sheet doesn't exist, create it
         console.log(`Sheet "${actualSheetName}" doesn't exist, creating it`);
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId,
-          resource: {
-            requests: [{
-              addSheet: {
-                properties: {
-                  title: actualSheetName
+        try {
+          await sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            resource: {
+              requests: [{
+                addSheet: {
+                  properties: {
+                    title: actualSheetName
+                  }
                 }
-              }
-            }]
-          }
+              }]
+            }
+          });
+          
+          // Add headers
+          await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${actualSheetName}!A1:C1`,
+            valueInputOption: "USER_ENTERED",
+            resource: {
+              values: [["User Message", "Assistant Response", "Timestamp"]]
+            }
+          });
+          console.log(`Created sheet "${actualSheetName}" with headers`);
+        } catch (createError) {
+          console.error('Error creating sheet:', createError);
+          return res.status(500).json({ 
+            error: "Failed to create sheet", 
+            details: createError.message,
+            code: createError.code || 'SHEET_CREATE_ERROR'
+          });
+        }
+      } else if (sheetError.code === 403 || sheetError.message.includes('permission')) {
+        // Permission error
+        console.error('Permission denied to access spreadsheet');
+        return res.status(403).json({ 
+          error: "Permission denied to access the spreadsheet", 
+          details: sheetError.message,
+          code: 'PERMISSION_DENIED'
         });
-        
-        // Add headers
-        await sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: `${actualSheetName}!A1:C1`,
-          valueInputOption: "USER_ENTERED",
-          resource: {
-            values: [["User Message", "Assistant Response", "Timestamp"]]
-          }
-        });
-        console.log(`Created sheet "${actualSheetName}" with headers`);
       } else {
         // Some other error with the sheet
         throw sheetError;
@@ -940,17 +1084,30 @@ app.post("/api/log-data-v1", async (req, res) => {
     }
     
     // Now append the data
-    const response = await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${actualSheetName}!A:C`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
-      },
-    });
-    
-    console.log('Data logged successfully!');
-    res.json({ message: "Data logged successfully!", response: response.data });
+    try {
+      const response = await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${actualSheetName}!A:C`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
+        },
+      });
+      
+      console.log('Data logged successfully!');
+      res.json({ 
+        message: "Data logged successfully!", 
+        response: response.data,
+        userId: authUserId // Return the userId that was used
+      });
+    } catch (appendError) {
+      console.error('Error appending data:', appendError);
+      return res.status(500).json({ 
+        error: "Failed to append data to sheet", 
+        details: appendError.message,
+        code: appendError.code || 'APPEND_ERROR'
+      });
+    }
   } catch (error) {
     console.error("Logging error:", error);
     
@@ -2132,4 +2289,190 @@ app.listen(PORT, () => {
 
 // Export app for testing
 module.exports = app;
+
+// Add a specific endpoint for ChatGPT plugin debugging
+app.get('/chatgpt-debug', (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>ChatGPT Plugin Debug</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+          .debug-box { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; }
+          pre { white-space: pre-wrap; word-break: break-all; }
+          .section { border-left: 4px solid #4285f4; padding-left: 15px; margin: 20px 0; }
+          h2 { color: #4285f4; }
+        </style>
+      </head>
+      <body>
+        <h1>ChatGPT Plugin Debug Information</h1>
+        
+        <div class="section">
+          <h2>Environment</h2>
+          <p>Node Environment: ${process.env.NODE_ENV || 'development'}</p>
+          <p>Server URL: ${process.env.GOOGLE_REDIRECT_URI ? process.env.GOOGLE_REDIRECT_URI.split('/auth')[0] : 'Not configured'}</p>
+        </div>
+        
+        <div class="section">
+          <h2>OAuth Configuration</h2>
+          <p>Redirect URI: ${process.env.GOOGLE_REDIRECT_URI || 'Not configured'}</p>
+          <p>Client ID: ${process.env.GOOGLE_CLIENT_ID ? '✓ Configured' : '✗ Missing'}</p>
+          <p>Client Secret: ${process.env.GOOGLE_CLIENT_SECRET ? '✓ Configured' : '✗ Missing'}</p>
+        </div>
+        
+        <div class="section">
+          <h2>Database Status</h2>
+          <p>Database URL: ${process.env.DATABASE_URL ? '✓ Configured' : '✗ Missing'}</p>
+        </div>
+        
+        <div class="section">
+          <h2>Recent Authentication Activity</h2>
+          <div id="recent-auth">Loading...</div>
+        </div>
+        
+        <div class="section">
+          <h2>Test OAuth Flow</h2>
+          <p>Click the button below to test the OAuth flow:</p>
+          <button id="test-oauth">Test OAuth Flow</button>
+          <div id="oauth-result" style="margin-top: 10px;"></div>
+        </div>
+        
+        <script>
+          // Fetch recent authentication activity
+          fetch('/api/debug/recent-auth')
+            .then(response => response.json())
+            .then(data => {
+              document.getElementById('recent-auth').innerHTML = 
+                data.recentAuth.length > 0 
+                  ? '<pre>' + JSON.stringify(data.recentAuth, null, 2) + '</pre>'
+                  : '<p>No recent authentication activity</p>';
+            })
+            .catch(error => {
+              document.getElementById('recent-auth').innerHTML = 
+                '<p>Error fetching authentication data: ' + error.message + '</p>';
+            });
+          
+          // Test OAuth flow
+          document.getElementById('test-oauth').addEventListener('click', function() {
+            const resultDiv = document.getElementById('oauth-result');
+            resultDiv.innerHTML = '<p>Initiating OAuth test...</p>';
+            
+            fetch('/api/debug/test-oauth')
+              .then(response => response.json())
+              .then(data => {
+                if (data.url) {
+                  resultDiv.innerHTML = '<p>Redirecting to OAuth URL...</p>';
+                  window.location.href = data.url;
+                } else {
+                  resultDiv.innerHTML = '<p>Error: ' + (data.error || 'Unknown error') + '</p>';
+                }
+              })
+              .catch(error => {
+                resultDiv.innerHTML = '<p>Error: ' + error.message + '</p>';
+              });
+          });
+        </script>
+      </body>
+    </html>
+  `);
+});
+
+// Debug endpoint to get recent authentication activity
+app.get('/api/debug/recent-auth', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT user_id, email, created_at, last_used FROM auth_tokens ORDER BY last_used DESC LIMIT 5'
+    );
+    
+    // Redact sensitive information
+    const recentAuth = result.rows.map(row => ({
+      user_id: row.user_id.substring(0, 8) + '...',
+      email: row.email ? row.email.split('@')[0] + '@...' : null,
+      created_at: row.created_at,
+      last_used: row.last_used
+    }));
+    
+    res.json({ recentAuth });
+  } catch (error) {
+    console.error('Error fetching recent auth:', error);
+    res.status(500).json({ error: 'Failed to fetch recent authentication data' });
+  }
+});
+
+// Debug endpoint to test OAuth flow
+app.get('/api/debug/test-oauth', (req, res) => {
+  try {
+    const oauth2Client = createOAuth2Client();
+    const testState = 'debug-' + crypto.randomBytes(8).toString('hex');
+    
+    const authUrl = oauth2Client.generateAuthUrl({
+      access_type: "offline",
+      scope: ["https://www.googleapis.com/auth/spreadsheets"],
+      prompt: 'consent',
+      state: testState
+    });
+    
+    res.json({ url: authUrl });
+  } catch (error) {
+    console.error('Error generating test OAuth URL:', error);
+    res.status(500).json({ error: 'Failed to generate OAuth URL' });
+  }
+});
+
+// Add a specific endpoint for ChatGPT plugin to check connection
+app.get('/api/plugin/check', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'GPT to Sheet plugin is connected and working',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Add a specific endpoint for ChatGPT plugin to get user ID
+app.get('/api/plugin/get-user-id', async (req, res) => {
+  const authHeader = req.get('Authorization');
+  
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ 
+      error: 'No authorization token provided',
+      message: 'Please authenticate with Google first'
+    });
+  }
+  
+  const token = authHeader.substring(7);
+  
+  try {
+    // Try to get or create user ID for this token
+    const userId = await getUserIdByAccessToken(token);
+    
+    if (!userId) {
+      return res.status(401).json({ 
+        error: 'Failed to identify user',
+        message: 'Could not find or create user ID for the provided token'
+      });
+    }
+    
+    // Update last used timestamp
+    try {
+      await pool.query(
+        'UPDATE auth_tokens SET last_used = CURRENT_TIMESTAMP WHERE user_id = $1',
+        [userId]
+      );
+    } catch (dbError) {
+      console.error('Error updating last used timestamp:', dbError);
+      // Continue anyway
+    }
+    
+    return res.json({
+      userId: userId,
+      message: 'User ID retrieved successfully'
+    });
+  } catch (error) {
+    console.error('Error getting user ID for plugin:', error);
+    return res.status(500).json({ 
+      error: 'Failed to process authentication',
+      message: error.message
+    });
+  }
+});
 

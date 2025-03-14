@@ -3,6 +3,8 @@ require("dotenv").config();
 const { oauth2Client, storeTokens } = require('./auth');
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+const fs = require('fs');
 
 router.get('/', async (req, res) => {
   const { code } = req.query;
@@ -60,5 +62,22 @@ router.get('/', async (req, res) => {
     });
   }
 });
+
+// Add this to your server startup
+try {
+  const testDir = path.join(__dirname, 'pending_conversations');
+  if (!fs.existsSync(testDir)) {
+    fs.mkdirSync(testDir, { recursive: true });
+    console.log(`Created test directory: ${testDir}`);
+  } else {
+    console.log(`Test directory exists: ${testDir}`);
+  }
+  
+  const testFile = path.join(testDir, 'test.txt');
+  fs.writeFileSync(testFile, `Test file created at ${new Date().toISOString()}`);
+  console.log(`Successfully wrote to test file: ${testFile}`);
+} catch (error) {
+  console.error('File system test failed:', error.message);
+}
 
 module.exports = router;

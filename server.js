@@ -214,6 +214,9 @@ const pool = new Pool({
 // Constants and file paths
 const USERS_FILE = path.join(__dirname, 'users.json');
 
+// Add this constant near the top of the file, after other constants but before route handlers
+const DEFAULT_SPREADSHEET_ID = '1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4';
+
 // Database initialization function
 const initDatabase = async () => {
   try {
@@ -898,241 +901,249 @@ const getValidTokenForUser = async (userId) => {
 };
 // Simplified endpoint to log data with userId - with multiple fallback mechanisms
 app.post("/api/log-data-v1", async (req, res) => {
-  console.log('Log data request received:', {
-    headers: {
-      authorization: req.headers.authorization ? 'Bearer [REDACTED]' : undefined,
-      'content-type': req.headers['content-type']
-    },
-    body: {
-      spreadsheetId: req.body.spreadsheetId,
-      sheetName: req.body.sheetName,
-      userId: req.body.userId,
-      messageLength: req.body.userMessage?.length,
-      responseLength: req.body.assistantResponse?.length
-    }
-  });
-
-  const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp, userId } = req.body;
-  
-  let authUserId = userId;
-  let accessToken = null;
-  
-  // SOLUTION 1: Check for Authorization header (Bearer token)
-  const authHeader = req.get('Authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
-    console.log('Got Bearer token from Authorization header');
-    
-    // Try to get user ID from token
-    try {
-      const tokenUserId = await getUserIdByAccessToken(accessToken);
-      if (tokenUserId) {
-        console.log(`Found user ID ${tokenUserId} for this Bearer token`);
-        authUserId = tokenUserId;
-      }
-    } catch (authError) {
-      console.error('Error looking up user ID from token:', authError);
-      // Use token directly as fallback
-      authUserId = accessToken;
-      console.log('Using token directly as user ID (fallback)');
-    }
-  }
-  
-  // SOLUTION 2: Check if userId looks like an access token
-  if (!authUserId && userId && userId.startsWith('ya29.')) {
-    console.log('User ID appears to be an access token, using directly');
-    accessToken = userId;
-    authUserId = userId; // Use token directly
-  }
-  
-  // SOLUTION 3: Try to create a new user ID if we have a token but no user ID
-  if (!authUserId && accessToken) {
-    try {
-      console.log('Creating new user ID for token');
-      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
-    } catch (storeError) {
-      console.error('Failed to create user ID:', storeError);
-      // Use token directly as fallback
-      authUserId = accessToken;
-      console.log('Using token directly as user ID (fallback)');
-    }
-  }
-  
-  // SOLUTION 4: Generate a temporary user ID if nothing else works
-  if (!authUserId) {
-    console.log('No user ID or token available, generating temporary ID');
-    authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
-    
-    // Store the temporary ID with empty credentials
-    // This allows at least some form of session continuity
-    try {
-      global.tempUsers = global.tempUsers || {};
-      global.tempUsers[authUserId] = {
-        created: new Date().toISOString()
-      };
-    } catch (tempError) {
-      console.error('Failed to store temporary user:', tempError);
-    }
-  }
-  
-  console.log(`Final user ID for logging: ${authUserId}`);
-  
-  // Validate required fields
-  if (!spreadsheetId) {
-    console.error('Log attempt failed: No spreadsheetId provided');
-    return res.status(400).json({ error: "spreadsheetId is required" });
-  }
-  
-  if (!userMessage || !assistantResponse) {
-    console.error('Log attempt failed: Missing message content');
-    return res.status(400).json({ error: "userMessage and assistantResponse are required" });
-  }
-  
   try {
-    // SOLUTION 5: Direct token usage if it's a token
-    let token;
-    if (authUserId.startsWith('ya29.')) {
-      console.log('Using user ID directly as token');
-      token = authUserId;
-    } else if (accessToken) {
-      console.log('Using stored access token');
-      token = accessToken;
-    } else {
-      // Get a valid token for this user through normal means
-      console.log(`Getting token for user: ${authUserId}`);
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
+    
+    console.log('Log data request received:', {
+      headers: {
+        authorization: req.headers.authorization ? 'Bearer [REDACTED]' : undefined,
+        'content-type': req.headers['content-type']
+      },
+      body: {
+        spreadsheetId,
+        sheetName: req.body.sheetName,
+        userId: req.body.userId,
+        messageLength: req.body.userMessage?.length,
+        responseLength: req.body.assistantResponse?.length
+      }
+    });
+  
+    let authUserId = req.body.userId;
+    let accessToken = null;
+    
+    // SOLUTION 1: Check for Authorization header (Bearer token)
+    const authHeader = req.get('Authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
+      console.log('Got Bearer token from Authorization header');
+      
+      // Try to get user ID from token
       try {
-        token = await getValidTokenForUser(authUserId);
-      } catch (tokenError) {
-        console.error(`Error getting token for user ${authUserId}:`, tokenError);
-        return res.status(401).json({ 
-          error: "Authentication failed", 
-          details: tokenError.message,
-          code: 'AUTH_ERROR'
-        });
+        const tokenUserId = await getUserIdByAccessToken(accessToken);
+        if (tokenUserId) {
+          console.log(`Found user ID ${tokenUserId} for this Bearer token`);
+          authUserId = tokenUserId;
+        }
+      } catch (authError) {
+        console.error('Error looking up user ID from token:', authError);
+        // Use token directly as fallback
+        authUserId = accessToken;
+        console.log('Using token directly as user ID (fallback)');
       }
     }
     
-    console.log('Successfully obtained token for request');
+    // SOLUTION 2: Check if userId looks like an access token
+    if (!authUserId && req.body.userId && req.body.userId.startsWith('ya29.')) {
+      console.log('User ID appears to be an access token, using directly');
+      accessToken = req.body.userId;
+      authUserId = req.body.userId; // Use token directly
+    }
     
-    // Create OAuth client with the token
-    const oauth2Client = createOAuth2Client();
-    oauth2Client.setCredentials({ access_token: token });
+    // SOLUTION 3: Try to create a new user ID if we have a token but no user ID
+    if (!authUserId && accessToken) {
+      try {
+        console.log('Creating new user ID for token');
+        authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
+      } catch (storeError) {
+        console.error('Failed to create user ID:', storeError);
+        // Use token directly as fallback
+        authUserId = accessToken;
+        console.log('Using token directly as user ID (fallback)');
+      }
+    }
     
-    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
-    const actualSheetName = sheetName || "Data"; // Default to "Data" if not specified
-    
-    console.log(`Writing to sheet "${actualSheetName}" in spreadsheet "${spreadsheetId}"`);
-    
-    // First check if the sheet exists, create it if it doesn't
-    try {
-      // Try to get the sheet info
-      await sheets.spreadsheets.get({
-        spreadsheetId,
-        ranges: [`${actualSheetName}!A1`]
-      });
-      console.log(`Sheet "${actualSheetName}" exists`);
-    } catch (sheetError) {
-      console.log('Sheet error:', sheetError.message);
+    // SOLUTION 4: Generate a temporary user ID if nothing else works
+    if (!authUserId) {
+      console.log('No user ID or token available, generating temporary ID');
+      authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
       
-      if (sheetError.code === 404 || sheetError.message.includes('not found')) {
-        // Sheet doesn't exist, create it
-        console.log(`Sheet "${actualSheetName}" doesn't exist, creating it`);
+      // Store the temporary ID with empty credentials
+      // This allows at least some form of session continuity
+      try {
+        global.tempUsers = global.tempUsers || {};
+        global.tempUsers[authUserId] = {
+          created: new Date().toISOString()
+        };
+      } catch (tempError) {
+        console.error('Failed to store temporary user:', tempError);
+      }
+    }
+    
+    console.log(`Final user ID for logging: ${authUserId}`);
+    
+    // Validate required fields
+    if (!spreadsheetId) {
+      console.error('Log attempt failed: No spreadsheetId provided');
+      return res.status(400).json({ error: "spreadsheetId is required" });
+    }
+    
+    if (!userMessage || !assistantResponse) {
+      console.error('Log attempt failed: Missing message content');
+      return res.status(400).json({ error: "userMessage and assistantResponse are required" });
+    }
+    
+    try {
+      // SOLUTION 5: Direct token usage if it's a token
+      let token;
+      if (authUserId.startsWith('ya29.')) {
+        console.log('Using user ID directly as token');
+        token = authUserId;
+      } else if (accessToken) {
+        console.log('Using stored access token');
+        token = accessToken;
+      } else {
+        // Get a valid token for this user through normal means
+        console.log(`Getting token for user: ${authUserId}`);
         try {
-          await sheets.spreadsheets.batchUpdate({
-            spreadsheetId,
-            resource: {
-              requests: [{
-                addSheet: {
-                  properties: {
-                    title: actualSheetName
-                  }
-                }
-              }]
-            }
-          });
-          
-          // Add headers
-          await sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: `${actualSheetName}!A1:C1`,
-            valueInputOption: "USER_ENTERED",
-            resource: {
-              values: [["User Message", "Assistant Response", "Timestamp"]]
-            }
-          });
-          console.log(`Created sheet "${actualSheetName}" with headers`);
-        } catch (createError) {
-          console.error('Error creating sheet:', createError);
-          return res.status(500).json({ 
-            error: "Failed to create sheet", 
-            details: createError.message,
-            code: createError.code || 'SHEET_CREATE_ERROR'
+          token = await getValidTokenForUser(authUserId);
+        } catch (tokenError) {
+          console.error(`Error getting token for user ${authUserId}:`, tokenError);
+          return res.status(401).json({ 
+            error: "Authentication failed", 
+            details: tokenError.message,
+            code: 'AUTH_ERROR'
           });
         }
-      } else if (sheetError.code === 403 || sheetError.message.includes('permission')) {
-        // Permission error
-        console.error('Permission denied to access spreadsheet');
-        return res.status(403).json({ 
-          error: "Permission denied to access the spreadsheet", 
-          details: sheetError.message,
-          code: 'PERMISSION_DENIED'
-        });
-      } else {
-        // Some other error with the sheet
-        throw sheetError;
       }
-    }
-    
-    // Now append the data
-    try {
-    const response = await sheets.spreadsheets.values.append({
-      spreadsheetId,
-        range: `${actualSheetName}!A:C`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
-      },
-    });
-    
-      console.log('Data logged successfully!');
-      res.json({ 
-        message: "Data logged successfully!", 
-        response: response.data,
-        userId: authUserId // Return the userId that was used
+      
+      console.log('Successfully obtained token for request');
+      
+      // Create OAuth client with the token
+      const oauth2Client = createOAuth2Client();
+      oauth2Client.setCredentials({ access_token: token });
+      
+      const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+      const actualSheetName = req.body.sheetName || "Data"; // Default to "Data" if not specified
+      
+      console.log(`Writing to sheet "${actualSheetName}" in spreadsheet "${spreadsheetId}"`);
+      
+      // First check if the sheet exists, create it if it doesn't
+      try {
+        // Try to get the sheet info
+        await sheets.spreadsheets.get({
+          spreadsheetId,
+          ranges: [`${actualSheetName}!A1`]
+        });
+        console.log(`Sheet "${actualSheetName}" exists`);
+      } catch (sheetError) {
+        console.log('Sheet error:', sheetError.message);
+        
+        if (sheetError.code === 404 || sheetError.message.includes('not found')) {
+          // Sheet doesn't exist, create it
+          console.log(`Sheet "${actualSheetName}" doesn't exist, creating it`);
+          try {
+            await sheets.spreadsheets.batchUpdate({
+              spreadsheetId,
+              resource: {
+                requests: [{
+                  addSheet: {
+                    properties: {
+                      title: actualSheetName
+                    }
+                  }
+                }]
+              }
+            });
+            
+            // Add headers
+            await sheets.spreadsheets.values.update({
+              spreadsheetId,
+              range: `${actualSheetName}!A1:C1`,
+              valueInputOption: "USER_ENTERED",
+              resource: {
+                values: [["User Message", "Assistant Response", "Timestamp"]]
+              }
+            });
+            console.log(`Created sheet "${actualSheetName}" with headers`);
+          } catch (createError) {
+            console.error('Error creating sheet:', createError);
+            return res.status(500).json({ 
+              error: "Failed to create sheet", 
+              details: createError.message,
+              code: createError.code || 'SHEET_CREATE_ERROR'
+            });
+          }
+        } else if (sheetError.code === 403 || sheetError.message.includes('permission')) {
+          // Permission error
+          console.error('Permission denied to access spreadsheet');
+          return res.status(403).json({ 
+            error: "Permission denied to access the spreadsheet", 
+            details: sheetError.message,
+            code: 'PERMISSION_DENIED'
+          });
+        } else {
+          // Some other error with the sheet
+          throw sheetError;
+        }
+      }
+      
+      // Now append the data
+      try {
+      const response = await sheets.spreadsheets.values.append({
+        spreadsheetId,
+          range: `${actualSheetName}!A:C`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[userMessage, assistantResponse, new Date().toISOString()]],
+        },
       });
-    } catch (appendError) {
-      console.error('Error appending data:', appendError);
-      return res.status(500).json({ 
-        error: "Failed to append data to sheet", 
-        details: appendError.message,
-        code: appendError.code || 'APPEND_ERROR'
+      
+        console.log('Data logged successfully!');
+        res.json({ 
+          message: "Data logged successfully!", 
+          response: response.data,
+          userId: authUserId // Return the userId that was used
+        });
+      } catch (appendError) {
+        console.error('Error appending data:', appendError);
+        return res.status(500).json({ 
+          error: "Failed to append data to sheet", 
+          details: appendError.message,
+          code: appendError.code || 'APPEND_ERROR'
+        });
+      }
+    } catch (error) {
+      console.error("Logging error:", error);
+      
+      // Provide a more specific error message based on the error type
+      let errorMessage = "Failed to write to sheet";
+      let statusCode = 500;
+      
+      if (error.message.includes('User not found')) {
+        errorMessage = "User not found or not authenticated";
+        statusCode = 401;
+      } else if (error.message.includes('invalid_grant')) {
+        errorMessage = "Authentication expired, please re-authenticate";
+        statusCode = 401;
+      } else if (error.code === 403 || error.message.includes('permission')) {
+        errorMessage = "Permission denied to access the spreadsheet";
+        statusCode = 403;
+      } else if (error.code === 404 || error.message.includes('not found')) {
+        errorMessage = "Spreadsheet not found";
+        statusCode = 404;
+      }
+      
+      res.status(statusCode).json({ 
+        error: errorMessage, 
+        details: error.message,
+        code: error.code || 'UNKNOWN'
       });
     }
   } catch (error) {
-    console.error("Logging error:", error);
-    
-    // Provide a more specific error message based on the error type
-    let errorMessage = "Failed to write to sheet";
-    let statusCode = 500;
-    
-    if (error.message.includes('User not found')) {
-      errorMessage = "User not found or not authenticated";
-      statusCode = 401;
-    } else if (error.message.includes('invalid_grant')) {
-      errorMessage = "Authentication expired, please re-authenticate";
-      statusCode = 401;
-    } else if (error.code === 403 || error.message.includes('permission')) {
-      errorMessage = "Permission denied to access the spreadsheet";
-      statusCode = 403;
-    } else if (error.code === 404 || error.message.includes('not found')) {
-      errorMessage = "Spreadsheet not found";
-      statusCode = 404;
-    }
-    
-    res.status(statusCode).json({ 
-      error: errorMessage, 
-      details: error.message,
-      code: error.code || 'UNKNOWN'
+    console.error('Error handling log-data-v1:', error);
+    res.status(500).json({ 
+      error: "Failed to handle log-data-v1", 
+      details: error.message
     });
   }
 });
@@ -2764,7 +2775,7 @@ app.post('/api/chatgpt/get-user-id', async (req, res) => {
 app.post('/api/chatgpt/log-conversation', async (req, res) => {
   console.log('ChatGPT log-conversation request received');
   
-  const { spreadsheetId, userMessage, assistantResponse } = req.body;
+  const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
   
   if (!spreadsheetId) {
     console.error('Log attempt failed: No spreadsheetId provided');
@@ -2888,7 +2899,7 @@ app.post('/api/chatgpt/log-conversation', async (req, res) => {
 app.post('/api/chatgpt/log-transaction', async (req, res) => {
   console.log('ChatGPT log-transaction request received');
   
-  const { spreadsheetId, data } = req.body;
+  const { spreadsheetId = DEFAULT_SPREADSHEET_ID, data } = req.body;
   
   if (!spreadsheetId) {
     console.error('Log attempt failed: No spreadsheetId provided');
@@ -2987,4 +2998,13 @@ if (!fs.existsSync(logoPath)) {
   fs.writeFileSync(logoPath, logoBuffer);
   console.log('Created default logo.png');
 }
+
+// Add a new endpoint to get the default spreadsheet ID
+app.get('/api/default-spreadsheet', (req, res) => {
+  res.json({
+    spreadsheetId: DEFAULT_SPREADSHEET_ID,
+    url: `https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit`,
+    message: 'This is the default spreadsheet used when no spreadsheet ID is provided'
+  });
+});
 

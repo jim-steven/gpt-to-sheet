@@ -16,9 +16,6 @@ const axios = require('axios');
 // Environment configuration
 require("dotenv").config();
 
-// Default spreadsheet ID to use when none is provided
-const DEFAULT_SPREADSHEET_ID = '1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4';
-
 // Store access token with a user ID for ChatGPT API - with multiple fallback mechanisms
 const storeAccessToken = async (accessToken, refreshToken, expiryDate) => {
   // Generate a unique ID for this token
@@ -231,18 +228,6 @@ const initDatabase = async () => {
         last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-
-    // Add user_preferences table to store spreadsheet associations and settings
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_preferences (
-        email TEXT PRIMARY KEY,
-        default_spreadsheet_id TEXT,
-        default_categories JSONB,
-        budget_limits JSONB,
-        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
@@ -262,13 +247,13 @@ const getTokensFromDB = async (userId) => {
     );
     
     if (result.rows.length > 0) {
-    const { access_token, refresh_token, token_expiry } = result.rows[0];
+      const { access_token, refresh_token, token_expiry } = result.rows[0];
       console.log('Found token in database');
-    return {
-      access_token,
-      refresh_token,
-      expiry_date: new Date(token_expiry).getTime()
-    };
+      return {
+        access_token,
+        refresh_token,
+        expiry_date: new Date(token_expiry).getTime()
+      };
     }
   } catch (dbError) {
     console.error('Database token retrieval failed:', dbError);
@@ -359,18 +344,7 @@ const generateUserId = () => {
 // OAuth proxy endpoints for GPT integration
 app.get('/oauth/authorize', (req, res) => {
   const params = new URLSearchParams(req.query);
-  console.log('OAuth authorize request received with params:', params.toString());
-  
-  // Log the redirect_uri to check if it's properly set
-  console.log('Redirect URI:', params.get('redirect_uri'));
-  
-  // Check if state parameter is present (needed for ChatGPT plugin flow)
-  if (!params.get('state')) {
-    console.log('Warning: No state parameter in OAuth request');
-  }
-  
   const googleAuthUrl = `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
-  console.log('Redirecting to Google OAuth URL:', googleAuthUrl);
   res.redirect(googleAuthUrl);
 });
 
@@ -400,16 +374,8 @@ app.post('/oauth/token', async (req, res) => {
       code,
       redirect_uri,
       client_id,
-      client_secret,
-      state
+      client_secret
     } = params;
-    
-    // Log state parameter which is important for ChatGPT plugin flow
-    if (state) {
-      console.log('State parameter present:', state);
-    } else {
-      console.log('Warning: No state parameter in token request');
-    }
     
     // Assume authorization_code if no grant_type specified (helps with ChatGPT integration)
     const effectiveGrantType = grant_type || (code ? 'authorization_code' : 'refresh_token');
@@ -426,22 +392,12 @@ app.post('/oauth/token', async (req, res) => {
     // Handle different grant types
     if (effectiveGrantType === 'authorization_code') {
       if (!code) {
-        console.error('Error: code is required for authorization_code grant type');
         return res.status(400).json({ error: 'code is required for authorization_code grant type' });
       }
       
       // Exchange authorization code for tokens
-      try {
-        tokenResponse = await oauth2Client.getToken(code);
-        console.log('Got token response:', JSON.stringify(tokenResponse));
-      } catch (tokenError) {
-        console.error('Error getting token from Google:', tokenError);
-        return res.status(400).json({ 
-          error: 'Failed to exchange authorization code', 
-          details: tokenError.message,
-          code: tokenError.code || 'UNKNOWN'
-        });
-      }
+      tokenResponse = await oauth2Client.getToken(code);
+      console.log('Got token response:', JSON.stringify(tokenResponse));
       
       // Ensure we have a refresh token by requesting offline access
       if (!tokenResponse.tokens.refresh_token) {
@@ -449,16 +405,11 @@ app.post('/oauth/token', async (req, res) => {
       }
       
       // Store the tokens and generate a user ID
-      let userId;
-      try {
-        userId = await storeAccessToken(
-          tokenResponse.tokens.access_token,
-          tokenResponse.tokens.refresh_token,
-          tokenResponse.tokens.expiry_date
-        );
-      } catch (storeError) {
-        console.error('Error storing tokens:', storeError);
-      }
+      const userId = await storeAccessToken(
+        tokenResponse.tokens.access_token,
+        tokenResponse.tokens.refresh_token,
+        tokenResponse.tokens.expiry_date
+      );
       
       if (!userId) {
         console.error('Failed to store tokens and generate userId');
@@ -468,7 +419,7 @@ app.post('/oauth/token', async (req, res) => {
       console.log(`Generated userId ${userId} for this token`);
       
       // Format response properly for ChatGPT, including the userId
-    const formattedResponse = {
+      const formattedResponse = {
         access_token: tokenResponse.tokens.access_token,
         token_type: "bearer",
         refresh_token: tokenResponse.tokens.refresh_token,
@@ -478,11 +429,9 @@ app.post('/oauth/token', async (req, res) => {
       
       console.log('Token exchange successful - formatted response:', formattedResponse);
       return res.json(formattedResponse);
-    } 
-    
-    if (effectiveGrantType === 'refresh_token') {
+      
+    } else if (effectiveGrantType === 'refresh_token') {
       if (!params.refresh_token) {
-        console.error('Error: refresh_token is required for refresh_token grant type');
         return res.status(400).json({ error: 'refresh_token is required for refresh_token grant type' });
       }
       
@@ -490,17 +439,7 @@ app.post('/oauth/token', async (req, res) => {
       oauth2Client.setCredentials({
         refresh_token: params.refresh_token
       });
-      
-      try {
-        tokenResponse = await oauth2Client.refreshAccessToken();
-      } catch (refreshError) {
-        console.error('Error refreshing token:', refreshError);
-        return res.status(400).json({ 
-          error: 'Failed to refresh token', 
-          details: refreshError.message,
-          code: refreshError.code || 'UNKNOWN'
-        });
-      }
+      tokenResponse = await oauth2Client.refreshAccessToken();
       
       // Update the stored tokens with the same user ID
       const userId = await getUserIdByAccessToken(params.access_token);
@@ -511,8 +450,7 @@ app.post('/oauth/token', async (req, res) => {
           tokenResponse.tokens.expiry_date
         );
       }
-    } else if (effectiveGrantType !== 'authorization_code') {
-      console.error('Error: Invalid or missing grant_type:', effectiveGrantType);
+    } else {
       return res.status(400).json({ error: 'Invalid or missing grant_type' });
     }
     
@@ -572,71 +510,22 @@ app.get("/auth/sso", (req, res) => {
   res.redirect(authUrl);
 });
 
-// Auth callback that stores tokens, email, and returns user ID
+// Auth callback that stores tokens and returns user ID
 app.get("/auth/callback", async (req, res) => {
-  console.log('Auth callback received with query params:', req.query);
-  
-  const { code, state, error } = req.query;
-  
-  // Check for OAuth errors
-  if (error) {
-    console.error('OAuth error returned in callback:', error, req.query.error_description);
-    return res.redirect(`/auth-error?error=${encodeURIComponent(error)}&description=${encodeURIComponent(req.query.error_description || '')}`);
-  }
-  
-  if (!code) {
-    console.error('No authorization code in callback');
-    return res.redirect('/auth-error?error=no_code&description=No+authorization+code+received');
-  }
-  
-  if (!state) {
-    console.warn('No state parameter in callback - this may cause issues with ChatGPT plugin flow');
-  }
-  
+  const { code, state } = req.query;
   const userId = state; // Retrieve user ID from state
-  console.log(`Using state as userId: ${userId}`);
   
   try {
     const oauth2Client = createOAuth2Client();
-    
-    let tokens;
-    try {
-      const tokenResponse = await oauth2Client.getToken(code);
-      tokens = tokenResponse.tokens;
-      console.log('Successfully exchanged code for tokens');
-    } catch (tokenError) {
-      console.error('Error exchanging code for tokens:', tokenError);
-      return res.redirect(`/auth-error?error=token_exchange&description=${encodeURIComponent(tokenError.message)}`);
-    }
-    
-    // Get user email from Google API
-    let userEmail = null;
-    try {
-      oauth2Client.setCredentials(tokens);
-      const people = google.people({ version: 'v1', auth: oauth2Client });
-      const profile = await people.people.get({
-        resourceName: 'people/me',
-        personFields: 'emailAddresses',
-      });
-      
-      if (profile.data.emailAddresses && profile.data.emailAddresses.length > 0) {
-        userEmail = profile.data.emailAddresses[0].value;
-        console.log(`Retrieved email: ${userEmail} for user ${userId}`);
-      }
-    } catch (emailError) {
-      console.error('Error retrieving user email:', emailError);
-      // Continue without email if retrieval fails
-    }
+    const { tokens } = await oauth2Client.getToken(code);
     
     // Save tokens with user ID
     const users = readUsers();
     users[userId] = {
       tokens: tokens,
-      email: userEmail,
       created: new Date().toISOString()
     };
     saveUsers(users);
-    console.log(`Saved user ${userId} to file storage`);
     
     // For SSO flow, store in session and cookie
     if (req.session.userId === userId) {
@@ -647,64 +536,29 @@ app.get("/auth/callback", async (req, res) => {
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
       });
-      console.log(`Set cookie for SSO user ${userId}`);
       
       // Store tokens in database for SSO
       try {
         await pool.query(
-          'INSERT INTO auth_tokens(user_id, access_token, refresh_token, token_expiry, email) VALUES($1, $2, $3, $4, $5) ' +
-          'ON CONFLICT (user_id) DO UPDATE SET access_token = $2, refresh_token = $3, token_expiry = $4, email = $5, last_used = CURRENT_TIMESTAMP',
+          'INSERT INTO auth_tokens(user_id, access_token, refresh_token, token_expiry) VALUES($1, $2, $3, $4) ' +
+          'ON CONFLICT (user_id) DO UPDATE SET access_token = $2, refresh_token = $3, token_expiry = $4, last_used = CURRENT_TIMESTAMP',
           [
             userId, 
             tokens.access_token, 
             tokens.refresh_token, 
-            new Date(tokens.expiry_date),
-            userEmail
+            new Date(tokens.expiry_date)
           ]
         );
-        console.log(`Stored tokens in database for user ${userId}`);
       } catch (dbError) {
         console.error('Database error storing tokens:', dbError);
       }
     }
     
     // Redirect to success page with user ID
-    res.redirect(`/auth-success?userId=${userId}&email=${encodeURIComponent(userEmail || '')}`);
+    res.redirect(`/auth-success?userId=${userId}`);
   } catch (error) {
-    console.error('Authentication callback error:', error);
-    res.redirect(`/auth-error?error=general&description=${encodeURIComponent(error.message)}`);
+    res.status(500).json({ error: "Authentication failed", details: error.message });
   }
-});
-
-// Add an error page for authentication failures
-app.get("/auth-error", (req, res) => {
-  const error = req.query.error || 'unknown';
-  const description = req.query.description || 'An unknown error occurred during authentication';
-  
-  res.send(`
-    <html>
-      <head>
-        <title>Authentication Error</title>
-        <style>
-          body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-          .error-box { background: #ffebee; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #f44336; }
-          .button { background: #4285f4; color: white; border: none; padding: 10px 15px; border-radius: 5px; text-decoration: none; display: inline-block; margin-top: 20px; }
-        </style>
-      </head>
-      <body>
-        <h1>Authentication Failed ❌</h1>
-        
-        <div class="error-box">
-          <h3>Error: ${error}</h3>
-          <p>${description}</p>
-        </div>
-        
-        <p>Please try again or contact support if the issue persists.</p>
-        
-        <a href="/" class="button">Return to Home</a>
-      </body>
-    </html>
-  `);
 });
 
 // Route to check authentication status for SSO users
@@ -736,7 +590,6 @@ app.get('/auth/test', (req, res) => {
 // Success page that displays the user ID
 app.get("/auth-success", (req, res) => {
   const userId = req.query.userId;
-  const email = req.query.email || 'Not available';
   
   res.send(`
     <html>
@@ -750,7 +603,6 @@ app.get("/auth-success", (req, res) => {
           .success { color: green; display: none; margin-top: 10px; }
           .countdown { font-weight: bold; color: #4285f4; }
           .instructions { border-left: 4px solid #fbbc05; padding-left: 15px; margin: 20px 0; }
-          .email-info { color: #4285f4; font-weight: bold; }
         </style>
       </head>
       <body>
@@ -761,18 +613,16 @@ app.get("/auth-success", (req, res) => {
           <h3>What happens next:</h3>
           <p>1. This window will automatically close in <span class="countdown" id="countdown">5</span> seconds.</p>
           <p>2. Return to your ChatGPT conversation - it will continue automatically.</p>
-          <p>3. If the conversation doesn't continue, simply type "next" in ChatGPT.</p>
+          <p>3. If the conversation doesn't continue, simply type "continue" in ChatGPT.</p>
         </div>
         
-        <p>Your account information:</p>
-        <p>Email: <span class="email-info">${email}</span></p>
-        <p>User ID (save for future reference):</p>
+        <p>Your user ID (save for future reference):</p>
         <div class="id-box">
           <code id="userId">${userId}</code>
         </div>
         
         <div>
-        <button id="copy-btn">Copy User ID</button>
+          <button id="copy-btn">Copy User ID</button>
           <button class="auto-close" id="close-btn">Close Window Now</button>
         </div>
         <p class="success" id="success-msg">User ID copied to clipboard!</p>
@@ -822,7 +672,7 @@ const getValidTokenForUser = async (userId) => {
   
   // Special case: If userId looks like an access token (starts with ya29.), return it directly
   if (userId.startsWith('ya29.')) {
-    console.log('User ID appears to be a token, returning it directly');
+    console.log(`User ID appears to be a token, returning it directly`);
     return userId;
   }
   
@@ -838,7 +688,7 @@ const getValidTokenForUser = async (userId) => {
     const users = readUsers();
     const user = users[userId];
     
-    if (!user?.tokens) {
+    if (!user || !user.tokens) {
       console.error(`User ${userId} not found in file storage either!`);
       throw new Error("User not found or not authenticated");
     }
@@ -901,249 +751,194 @@ const getValidTokenForUser = async (userId) => {
 };
 // Simplified endpoint to log data with userId - with multiple fallback mechanisms
 app.post("/api/log-data-v1", async (req, res) => {
-  try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
-    
-    console.log('Log data request received:', {
-      headers: {
-        authorization: req.headers.authorization ? 'Bearer [REDACTED]' : undefined,
-        'content-type': req.headers['content-type']
-      },
-      body: {
-        spreadsheetId,
-        sheetName: req.body.sheetName,
-        userId: req.body.userId,
-        messageLength: req.body.userMessage?.length,
-        responseLength: req.body.assistantResponse?.length
-      }
-    });
+  const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp, userId } = req.body;
   
-    let authUserId = req.body.userId;
-    let accessToken = null;
+  console.log('Logging request received:', {
+    spreadsheetId,
+    sheetName,
+    userId,
+    messageLength: userMessage?.length,
+    responseLength: assistantResponse?.length
+  });
+  
+  let authUserId = userId;
+  let accessToken = null;
+  
+  // SOLUTION 1: Check for Authorization header (Bearer token)
+  const authHeader = req.get('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
+    console.log('Got Bearer token from Authorization header');
     
-    // SOLUTION 1: Check for Authorization header (Bearer token)
-    const authHeader = req.get('Authorization');
-    if (authHeader?.startsWith('Bearer ')) {
-      accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
-      console.log('Got Bearer token from Authorization header');
-      
-      // Try to get user ID from token
-      try {
-        const tokenUserId = await getUserIdByAccessToken(accessToken);
-        if (tokenUserId) {
-          console.log(`Found user ID ${tokenUserId} for this Bearer token`);
-          authUserId = tokenUserId;
-        }
-      } catch (authError) {
-        console.error('Error looking up user ID from token:', authError);
-        // Use token directly as fallback
-        authUserId = accessToken;
-        console.log('Using token directly as user ID (fallback)');
+    // Try to get user ID from token
+    try {
+      const tokenUserId = await getUserIdByAccessToken(accessToken);
+      if (tokenUserId) {
+        console.log(`Found user ID ${tokenUserId} for this Bearer token`);
+        authUserId = tokenUserId;
       }
+    } catch (authError) {
+      console.error('Error looking up user ID from token:', authError);
+      // Use token directly as fallback
+      authUserId = accessToken;
+      console.log('Using token directly as user ID (fallback)');
     }
-    
-    // SOLUTION 2: Check if userId looks like an access token
-    if (!authUserId && req.body.userId && req.body.userId.startsWith('ya29.')) {
-      console.log('User ID appears to be an access token, using directly');
-      accessToken = req.body.userId;
-      authUserId = req.body.userId; // Use token directly
+  }
+  
+  // SOLUTION 2: Check if userId looks like an access token
+  if (!authUserId && userId && userId.startsWith('ya29.')) {
+    console.log('User ID appears to be an access token, using directly');
+    accessToken = userId;
+    authUserId = userId; // Use token directly
+  }
+  
+  // SOLUTION 3: Try to create a new user ID if we have a token but no user ID
+  if (!authUserId && accessToken) {
+    try {
+      console.log('Creating new user ID for token');
+      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
+    } catch (storeError) {
+      console.error('Failed to create user ID:', storeError);
+      // Use token directly as fallback
+      authUserId = accessToken;
+      console.log('Using token directly as user ID (fallback)');
     }
-    
-    // SOLUTION 3: Try to create a new user ID if we have a token but no user ID
-    if (!authUserId && accessToken) {
-      try {
-        console.log('Creating new user ID for token');
-        authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
-      } catch (storeError) {
-        console.error('Failed to create user ID:', storeError);
-        // Use token directly as fallback
-        authUserId = accessToken;
-        console.log('Using token directly as user ID (fallback)');
-      }
-    }
-    
-    // SOLUTION 4: Generate a temporary user ID if nothing else works
+  }
+  
+  // SOLUTION 4: Generate a temporary user ID if nothing else works
   if (!authUserId) {
-      console.log('No user ID or token available, generating temporary ID');
-      authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
-      
-      // Store the temporary ID with empty credentials
-      // This allows at least some form of session continuity
-      try {
-        global.tempUsers = global.tempUsers || {};
-        global.tempUsers[authUserId] = {
-          created: new Date().toISOString()
-        };
-      } catch (tempError) {
-        console.error('Failed to store temporary user:', tempError);
-      }
+    console.log('No user ID or token available, generating temporary ID');
+    authUserId = 'temp_' + crypto.randomBytes(8).toString('hex');
+    
+    // Store the temporary ID with empty credentials
+    // This allows at least some form of session continuity
+    try {
+      global.tempUsers = global.tempUsers || {};
+      global.tempUsers[authUserId] = {
+        created: new Date().toISOString()
+      };
+    } catch (tempError) {
+      console.error('Failed to store temporary user:', tempError);
     }
-    
-    console.log(`Final user ID for logging: ${authUserId}`);
-    
-    // Validate required fields
-    if (!spreadsheetId) {
-      console.error('Log attempt failed: No spreadsheetId provided');
-      return res.status(400).json({ error: "spreadsheetId is required" });
-    }
-    
-    if (!userMessage || !assistantResponse) {
-      console.error('Log attempt failed: Missing message content');
-      return res.status(400).json({ error: "userMessage and assistantResponse are required" });
+  }
+  
+  console.log(`Final user ID for logging: ${authUserId}`);
+  
+  // Validate required fields
+  if (!spreadsheetId) {
+    console.error('Log attempt failed: No spreadsheetId provided');
+    return res.status(400).json({ error: "spreadsheetId is required" });
+  }
+  
+  if (!userMessage || !assistantResponse) {
+    console.error('Log attempt failed: Missing message content');
+    return res.status(400).json({ error: "userMessage and assistantResponse are required" });
   }
   
   try {
-      // SOLUTION 5: Direct token usage if it's a token
-      let token;
-      if (authUserId.startsWith('ya29.')) {
-        console.log('Using user ID directly as token');
-        token = authUserId;
-      } else if (accessToken) {
-        console.log('Using stored access token');
-        token = accessToken;
-      } else {
-        // Get a valid token for this user through normal means
-        console.log(`Getting token for user: ${authUserId}`);
-        try {
-          token = await getValidTokenForUser(authUserId);
-        } catch (tokenError) {
-          console.error(`Error getting token for user ${authUserId}:`, tokenError);
-          return res.status(401).json({ 
-            error: "Authentication failed", 
-            details: tokenError.message,
-            code: 'AUTH_ERROR'
-          });
-        }
-      }
-      
-      console.log('Successfully obtained token for request');
+    // SOLUTION 5: Direct token usage if it's a token
+    let token;
+    if (authUserId.startsWith('ya29.')) {
+      console.log('Using user ID directly as token');
+      token = authUserId;
+    } else if (accessToken) {
+      console.log('Using stored access token');
+      token = accessToken;
+    } else {
+      // Get a valid token for this user through normal means
+      console.log(`Getting token for user: ${authUserId}`);
+      token = await getValidTokenForUser(authUserId);
+    }
+    
+    console.log('Successfully obtained token for request');
     
     // Create OAuth client with the token
     const oauth2Client = createOAuth2Client();
     oauth2Client.setCredentials({ access_token: token });
     
     const sheets = google.sheets({ version: "v4", auth: oauth2Client });
-      const actualSheetName = req.body.sheetName || "Data"; // Default to "Data" if not specified
-      
-      console.log(`Writing to sheet "${actualSheetName}" in spreadsheet "${spreadsheetId}"`);
-      
-      // First check if the sheet exists, create it if it doesn't
-      try {
-        // Try to get the sheet info
-        await sheets.spreadsheets.get({
+    const actualSheetName = sheetName || "Data"; // Default to "Data" if not specified
+    
+    console.log(`Writing to sheet "${actualSheetName}" in spreadsheet "${spreadsheetId}"`);
+    
+    // First check if the sheet exists, create it if it doesn't
+    try {
+      // Try to get the sheet info
+      await sheets.spreadsheets.get({
+        spreadsheetId,
+        ranges: [`${actualSheetName}!A1`]
+      });
+      console.log(`Sheet "${actualSheetName}" exists`);
+    } catch (sheetError) {
+      if (sheetError.code === 404 || sheetError.message.includes('not found')) {
+        // Sheet doesn't exist, create it
+        console.log(`Sheet "${actualSheetName}" doesn't exist, creating it`);
+        await sheets.spreadsheets.batchUpdate({
           spreadsheetId,
-          ranges: [`${actualSheetName}!A1`]
-        });
-        console.log(`Sheet "${actualSheetName}" exists`);
-      } catch (sheetError) {
-        console.log('Sheet error:', sheetError.message);
-        
-        if (sheetError.code === 404 || sheetError.message.includes('not found')) {
-          // Sheet doesn't exist, create it
-          console.log(`Sheet "${actualSheetName}" doesn't exist, creating it`);
-          try {
-            await sheets.spreadsheets.batchUpdate({
-              spreadsheetId,
-              resource: {
-                requests: [{
-                  addSheet: {
-                    properties: {
-                      title: actualSheetName
-                    }
-                  }
-                }]
+          resource: {
+            requests: [{
+              addSheet: {
+                properties: {
+                  title: actualSheetName
+                }
               }
-            });
-            
-            // Add headers
-            await sheets.spreadsheets.values.update({
-              spreadsheetId,
-              range: `${actualSheetName}!A1:C1`,
-              valueInputOption: "USER_ENTERED",
-              resource: {
-                values: [["User Message", "Assistant Response", "Timestamp"]]
-              }
-            });
-            console.log(`Created sheet "${actualSheetName}" with headers`);
-          } catch (createError) {
-            console.error('Error creating sheet:', createError);
-            return res.status(500).json({ 
-              error: "Failed to create sheet", 
-              details: createError.message,
-              code: createError.code || 'SHEET_CREATE_ERROR'
-            });
+            }]
           }
-        } else if (sheetError.code === 403 || sheetError.message.includes('permission')) {
-          // Permission error
-          console.error('Permission denied to access spreadsheet');
-          return res.status(403).json({ 
-            error: "Permission denied to access the spreadsheet", 
-            details: sheetError.message,
-            code: 'PERMISSION_DENIED'
-          });
-        } else {
-          // Some other error with the sheet
-          throw sheetError;
-        }
+        });
+        
+        // Add headers
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${actualSheetName}!A1:C1`,
+          valueInputOption: "USER_ENTERED",
+          resource: {
+            values: [["User Message", "Assistant Response", "Timestamp"]]
+          }
+        });
+        console.log(`Created sheet "${actualSheetName}" with headers`);
+      } else {
+        // Some other error with the sheet
+        throw sheetError;
       }
-      
-      // Now append the data
-      try {
+    }
+    
+    // Now append the data
     const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
-          range: `${actualSheetName}!A:C`,
+      range: `${actualSheetName}!A:C`,
       valueInputOption: "USER_ENTERED",
       requestBody: {
-          values: [[userMessage, assistantResponse, new Date().toISOString()]],
+        values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
       },
     });
     
-        console.log('Data logged successfully!');
-        res.json({ 
-          message: "Data logged successfully!", 
-          response: response.data,
-          userId: authUserId // Return the userId that was used
-        });
-      } catch (appendError) {
-        console.error('Error appending data:', appendError);
-        return res.status(500).json({ 
-          error: "Failed to append data to sheet", 
-          details: appendError.message,
-          code: appendError.code || 'APPEND_ERROR'
-        });
-      }
+    console.log('Data logged successfully!');
+    res.json({ message: "Data logged successfully!", response: response.data });
   } catch (error) {
     console.error("Logging error:", error);
-      
-      // Provide a more specific error message based on the error type
-      let errorMessage = "Failed to write to sheet";
-      let statusCode = 500;
-      
-      if (error.message.includes('User not found')) {
-        errorMessage = "User not found or not authenticated";
-        statusCode = 401;
-      } else if (error.message.includes('invalid_grant')) {
-        errorMessage = "Authentication expired, please re-authenticate";
-        statusCode = 401;
-      } else if (error.code === 403 || error.message.includes('permission')) {
-        errorMessage = "Permission denied to access the spreadsheet";
-        statusCode = 403;
-      } else if (error.code === 404 || error.message.includes('not found')) {
-        errorMessage = "Spreadsheet not found";
-        statusCode = 404;
-      }
-      
-      res.status(statusCode).json({ 
-        error: errorMessage, 
-        details: error.message,
-        code: error.code || 'UNKNOWN'
-      });
+    
+    // Provide a more specific error message based on the error type
+    let errorMessage = "Failed to write to sheet";
+    let statusCode = 500;
+    
+    if (error.message.includes('User not found')) {
+      errorMessage = "User not found or not authenticated";
+      statusCode = 401;
+    } else if (error.message.includes('invalid_grant')) {
+      errorMessage = "Authentication expired, please re-authenticate";
+      statusCode = 401;
+    } else if (error.code === 403 || error.message.includes('permission')) {
+      errorMessage = "Permission denied to access the spreadsheet";
+      statusCode = 403;
+    } else if (error.code === 404 || error.message.includes('not found')) {
+      errorMessage = "Spreadsheet not found";
+      statusCode = 404;
     }
-  } catch (error) {
-    console.error('Error handling log-data-v1:', error);
-    res.status(500).json({ 
-      error: "Failed to handle log-data-v1", 
-      details: error.message
+    
+    res.status(statusCode).json({ 
+      error: errorMessage, 
+      details: error.message,
+      code: error.code || 'UNKNOWN'
     });
   }
 });
@@ -1183,48 +978,7 @@ app.post("/api/get-sheet-data", async (req, res) => {
 // Endpoint for ChatGPT to check if a user is authenticated
 app.get('/auth/check-session', async (req, res) => {
   const sessionId = req.query.session || req.cookies.auth_session;
-  const userId = req.query.userId || req.cookies.gpt_sheet_user_id;
   
-  // First check for specific user ID if provided
-  if (userId) {
-    try {
-      const result = await pool.query(
-        'SELECT user_id, email, created_at, last_used FROM auth_tokens WHERE user_id = $1',
-        [userId]
-      );
-      
-      if (result.rows.length > 0) {
-        const userData = result.rows[0];
-        
-        // Get user preferences if email is available
-        let preferences = null;
-        if (userData.email) {
-          const prefResult = await pool.query(
-            'SELECT default_spreadsheet_id, default_categories, budget_limits FROM user_preferences WHERE email = $1',
-            [userData.email]
-          );
-          
-          if (prefResult.rows.length > 0) {
-            preferences = prefResult.rows[0];
-          }
-        }
-        
-        return res.json({
-          authenticated: true,
-          userId: userData.user_id,
-          email: userData.email,
-          authenticatedAt: userData.created_at,
-          lastUsed: userData.last_used,
-          preferences: preferences,
-          message: 'Authentication successful'
-        });
-      }
-    } catch (error) {
-      console.error('Error checking user authentication:', error);
-    }
-  }
-  
-  // If no specific user ID or not found, check for recent authentication
   if (!sessionId) {
     return res.status(404).json({ 
       authenticated: false,
@@ -1235,7 +989,7 @@ app.get('/auth/check-session', async (req, res) => {
   try {
     // Check if the sessionId is in our db of authenticated sessions
     const result = await pool.query(
-      'SELECT user_id, email, created_at FROM auth_tokens WHERE created_at > NOW() - INTERVAL \'1 day\' ORDER BY created_at DESC LIMIT 1'
+      'SELECT user_id, created_at FROM auth_tokens WHERE created_at > NOW() - INTERVAL \'10 minutes\' ORDER BY created_at DESC LIMIT 1'
     );
     
     if (result.rows.length === 0) {
@@ -1246,27 +1000,13 @@ app.get('/auth/check-session', async (req, res) => {
     }
     
     // Return the most recently authenticated user
-    const userData = result.rows[0];
-    
-    // Get user preferences if email is available
-    let preferences = null;
-    if (userData.email) {
-      const prefResult = await pool.query(
-        'SELECT default_spreadsheet_id, default_categories, budget_limits FROM user_preferences WHERE email = $1',
-        [userData.email]
-      );
-      
-      if (prefResult.rows.length > 0) {
-        preferences = prefResult.rows[0];
-      }
-    }
+    const userId = result.rows[0].user_id;
+    const createdAt = result.rows[0].created_at;
     
     return res.json({
       authenticated: true,
-      userId: userData.user_id,
-      email: userData.email,
-      authenticatedAt: userData.created_at,
-      preferences: preferences,
+      userId: userId,
+      authenticatedAt: createdAt,
       message: 'Authentication successful'
     });
   } catch (error) {
@@ -1278,634 +1018,19 @@ app.get('/auth/check-session', async (req, res) => {
   }
 });
 
-// New endpoint to store user preferences
-app.post('/api/user/preferences', async (req, res) => {
-  const { email, spreadsheetId, categories, budgetLimits } = req.body;
-  
-  if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
-  }
-  
-  try {
-    await pool.query(
-      `INSERT INTO user_preferences (email, default_spreadsheet_id, default_categories, budget_limits)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (email) 
-       DO UPDATE SET 
-         default_spreadsheet_id = COALESCE($2, user_preferences.default_spreadsheet_id),
-         default_categories = COALESCE($3, user_preferences.default_categories),
-         budget_limits = COALESCE($4, user_preferences.budget_limits),
-         last_updated = CURRENT_TIMESTAMP`,
-      [
-        email, 
-        spreadsheetId || null, 
-        categories ? JSON.stringify(categories) : null, 
-        budgetLimits ? JSON.stringify(budgetLimits) : null
-      ]
-    );
-    
-    res.json({ 
-      success: true, 
-      message: 'User preferences updated successfully' 
-    });
-  } catch (error) {
-    console.error('Error updating user preferences:', error);
-    res.status(500).json({ 
-      error: 'Failed to update user preferences', 
-      details: error.message 
-    });
-  }
-});
-
-// New endpoint to get user preferences
-app.get('/api/user/preferences', async (req, res) => {
-  const { email, userId } = req.query;
-  
-  if (!email && !userId) {
-    return res.status(400).json({ error: 'Email or userId is required' });
-  }
-  
-  try {
-    let userEmail = email;
-    
-    // If userId is provided but not email, try to get email from auth_tokens
-    if (!userEmail && userId) {
-      const userResult = await pool.query(
-        'SELECT email FROM auth_tokens WHERE user_id = $1',
-        [userId]
-      );
-      
-      if (userResult.rows.length > 0 && userResult.rows[0].email) {
-        userEmail = userResult.rows[0].email;
-      } else {
-        return res.status(404).json({ error: 'User not found or email not available' });
-      }
-    }
-    
-    const result = await pool.query(
-      'SELECT default_spreadsheet_id, default_categories, budget_limits, last_updated FROM user_preferences WHERE email = $1',
-      [userEmail]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.json({ 
-        found: false,
-        message: 'No preferences found for this user'
-      });
-    }
-    
-    res.json({
-      found: true,
-      email: userEmail,
-      preferences: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Error retrieving user preferences:', error);
-    res.status(500).json({ 
-      error: 'Failed to retrieve user preferences', 
-      details: error.message 
-    });
-  }
-});
-
-// Enhanced function to check and setup all required sheets at once
-const setupFinanceSheets = async (sheets, spreadsheetId) => {
-  console.log(`Setting up finance sheets for spreadsheet: ${spreadsheetId}`);
-  
-  // Define all required sheets with their headers
-  const requiredSheets = {
-    'Finances': [
-      'Unique ID', 'Date', 'Category', 'Subcategory', 'Amount', 'Type', 'Payment Method', 'Notes'
-    ],
-    'Budget Tracking': [
-      'Category', 'Budget Limit', 'Spent', 'Remaining Budget', 'Status'
-    ],
-    'Grocery Receipts': [
-      'Unique ID', 'Date', 'Store', 'Item', 'Price'
-    ],
-    'Online Transactions': [
-      'Unique ID', 'Date', 'Vendor', 'Item', 'Price'
-    ],
-    'Credit Utilization': [
-      'Unique ID', 'Date', 'Account', 'Credit Limit', 'Credit Used', 'Remaining Credit', 'Utilization %'
-    ],
-    'Predictive Alerts': [
-      'Unique ID', 'Date', 'Type', 'Message', 'Trigger'
-    ],
-    'Token Usage': [
-      'Unique ID', 'Date', 'Tokens Used', 'Estimated Cost', 'Query'
-    ],
-    'Data': [
-      'User Message', 'Assistant Response', 'Timestamp'
-    ]
-  };
-  
-  // First, get all existing sheets
-  const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: 'sheets.properties.title'
-  });
-  
-  const existingSheets = spreadsheet.data.sheets.map(sheet => sheet.properties.title);
-  console.log(`Existing sheets: ${existingSheets.join(', ')}`);
-  
-  // Create batch requests for missing sheets
-  const batchRequests = [];
-  const sheetsToCreate = [];
-  
-  for (const [sheetName, headers] of Object.entries(requiredSheets)) {
-    if (!existingSheets.includes(sheetName)) {
-      sheetsToCreate.push(sheetName);
-      batchRequests.push({
-        addSheet: {
-          properties: {
-            title: sheetName
-          }
-        }
-      });
-    }
-  }
-  
-  // Create missing sheets in a single batch request if needed
-  if (batchRequests.length > 0) {
-    console.log(`Creating missing sheets: ${sheetsToCreate.join(', ')}`);
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      resource: {
-        requests: batchRequests
-      }
-    });
-  }
-  
-  // Now check and update headers for all sheets
-  const headerUpdates = [];
-  
-  for (const [sheetName, headers] of Object.entries(requiredSheets)) {
-    try {
-      // Check if headers exist and match expected headers
-      const headerResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${sheetName}!A1:Z1`
-      });
-      
-      const existingHeaders = headerResponse.data.values?.[0] || [];
-      
-      // If headers don't match or are missing, update them
-      if (existingHeaders.length === 0 || !headers.every(h => existingHeaders.includes(h))) {
-        console.log(`Updating headers for sheet "${sheetName}"`);
-        headerUpdates.push(
-          sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`,
-            valueInputOption: "USER_ENTERED",
-            resource: {
-              values: [headers]
-            }
-          })
-        );
-      }
-    } catch (error) {
-      console.error(`Error checking headers for sheet ${sheetName}:`, error);
-    }
-  }
-  
-  // Execute all header updates in parallel
-  if (headerUpdates.length > 0) {
-    await Promise.all(headerUpdates);
-    console.log('All headers updated successfully');
-  }
-  
-  return {
-    success: true,
-    sheetsCreated: sheetsToCreate,
-    message: 'Finance sheets setup completed successfully'
-  };
-};
-
-// New endpoint to setup all finance sheets at once
-app.post('/api/finance/setup-sheets', async (req, res) => {
-  const { spreadsheetId, userId, email } = req.body;
-  
-  console.log('Finance sheets setup request received:', {
-    spreadsheetId,
-    userId,
-    email
-  });
-  
-  let authUserId = userId;
-  let accessToken = null;
-  
-  // Authentication logic (same as other endpoints)
-  const authHeader = req.get('Authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    accessToken = authHeader.substring(7);
-    console.log('Got Bearer token from Authorization header');
-    
-    try {
-      const tokenUserId = await getUserIdByAccessToken(accessToken);
-      if (tokenUserId) {
-        console.log(`Found user ID ${tokenUserId} for this Bearer token`);
-        authUserId = tokenUserId;
-      }
-    } catch (authError) {
-      console.error('Error looking up user ID from token:', authError);
-      authUserId = accessToken;
-    }
-  }
-  
-  if (!authUserId && userId && userId.startsWith('ya29.')) {
-    accessToken = userId;
-    authUserId = userId;
-  }
-  
-  if (!authUserId && accessToken) {
-    try {
-      authUserId = await storeAccessToken(accessToken, '', Date.now() + 3600000);
-    } catch (storeError) {
-      authUserId = accessToken;
-    }
-  }
-  
-  if (!authUserId) {
-    authUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
-    try {
-      global.tempUsers = global.tempUsers || {};
-      global.tempUsers[authUserId] = {
-        created: new Date().toISOString()
-      };
-    } catch (tempError) {
-      console.error('Failed to store temporary user:', tempError);
-    }
-  }
-  
-  // Validate required fields
-  if (!spreadsheetId) {
-    return res.status(400).json({ error: "spreadsheetId is required" });
-  }
-  
-  try {
-    // Get token
-    let token;
-    if (authUserId.startsWith('ya29.')) {
-      token = authUserId;
-    } else if (accessToken) {
-      token = accessToken;
-    } else {
-      token = await getValidTokenForUser(authUserId);
-    }
-    
-    // Create OAuth client with the token
-    const oauth2Client = createOAuth2Client();
-    oauth2Client.setCredentials({ access_token: token });
-    
-    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
-    
-    // Setup all finance sheets
-    const result = await setupFinanceSheets(sheets, spreadsheetId);
-    
-    // If email is provided, store spreadsheet ID in user preferences
-    if (email) {
-      try {
-        await pool.query(
-          `INSERT INTO user_preferences (email, default_spreadsheet_id)
-           VALUES ($1, $2)
-           ON CONFLICT (email) 
-           DO UPDATE SET 
-             default_spreadsheet_id = $2,
-             last_updated = CURRENT_TIMESTAMP`,
-          [email, spreadsheetId]
-        );
-        console.log(`Associated spreadsheet ${spreadsheetId} with email ${email}`);
-      } catch (prefError) {
-        console.error('Error storing spreadsheet preference:', prefError);
-      }
-    }
-    
-    res.json({
-      message: "Finance sheets setup successfully",
-      result
-    });
-  } catch (error) {
-    console.error("Finance sheets setup error:", error);
-    
-    let errorMessage = "Failed to setup finance sheets";
-    let statusCode = 500;
-    
-    if (error.message.includes('User not found')) {
-      errorMessage = "User not found or not authenticated";
-      statusCode = 401;
-    } else if (error.message.includes('invalid_grant')) {
-      errorMessage = "Authentication expired, please re-authenticate";
-      statusCode = 401;
-    } else if (error.code === 403 || error.message.includes('permission')) {
-      errorMessage = "Permission denied to access the spreadsheet";
-      statusCode = 403;
-    } else if (error.code === 404 || error.message.includes('not found')) {
-      errorMessage = "Spreadsheet not found";
-      statusCode = 404;
-    }
-    
-    res.status(statusCode).json({ 
-      error: errorMessage, 
-      details: error.message,
-      code: error.code || 'UNKNOWN'
-    });
-  }
-});
-
-// Modify the processFinancialData function to use the setupFinanceSheets function
-const processFinancialData = async (sheets, spreadsheetId, data) => {
-  const transactionId = generateTransactionId();
-  const timestamp = new Date().toISOString();
-  const results = [];
-  
-  // Define sheet structures with their headers
-  const sheetStructures = {
-    'Finances': [
-      'Unique ID', 'Date', 'Category', 'Subcategory', 'Amount', 'Type', 'Payment Method', 'Notes'
-    ],
-    'Budget Tracking': [
-      'Category', 'Budget Limit', 'Spent', 'Remaining Budget', 'Status'
-    ],
-    'Grocery Receipts': [
-      'Unique ID', 'Date', 'Store', 'Item', 'Price'
-    ],
-    'Online Transactions': [
-      'Unique ID', 'Date', 'Vendor', 'Item', 'Price'
-    ],
-    'Credit Utilization': [
-      'Unique ID', 'Date', 'Account', 'Credit Limit', 'Credit Used', 'Remaining Credit', 'Utilization %'
-    ],
-    'Predictive Alerts': [
-      'Unique ID', 'Date', 'Type', 'Message', 'Trigger'
-    ],
-    'Token Usage': [
-      'Unique ID', 'Date', 'Tokens Used', 'Estimated Cost', 'Query'
-    ]
-  };
-  
-  // Ensure all required sheets exist with proper headers
-  // Use the new setupFinanceSheets function instead of individual calls
-  await setupFinanceSheets(sheets, spreadsheetId);
-  
-  // Process main transaction data
-  if (data.transaction) {
-    const { 
-      category, 
-      subcategory = '', 
-      amount, 
-      type, // 'Income' or 'Expense'
-      paymentMethod = '',
-      notes = ''
-    } = data.transaction;
-    
-    // Add to main Finances sheet
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: 'Finances!A:H',
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[
-          transactionId, 
-          timestamp, 
-          category, 
-          subcategory, 
-          amount, 
-          type, 
-          paymentMethod, 
-          notes
-        ]],
-      },
-    });
-    results.push({ sheet: 'Finances', status: 'success' });
-    
-    // Update Budget Tracking sheet
-    if (type === 'Expense') {
-      try {
-        // Get current budget data for this category
-        const budgetResponse = await sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: `Budget Tracking!A:E`
-        });
-        
-        const budgetRows = budgetResponse.data.values || [];
-        let categoryRow = budgetRows.findIndex(row => row[0] === category);
-        
-        if (categoryRow > 0) { // Skip header row
-          // Category exists, update spent amount
-          const currentBudget = parseFloat(budgetRows[categoryRow][1]) || 0;
-          const currentSpent = parseFloat(budgetRows[categoryRow][2]) || 0;
-          const newSpent = currentSpent + parseFloat(amount);
-          const remaining = currentBudget - newSpent;
-          const status = remaining < 0 ? 'OVER BUDGET' : 
-                        (remaining < 0.1 * currentBudget ? 'WARNING' : 'OK');
-          
-          await sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: `Budget Tracking!C${categoryRow + 1}:E${categoryRow + 1}`,
-            valueInputOption: "USER_ENTERED",
-            resource: {
-              values: [[newSpent, remaining, status]]
-            }
-          });
-          
-          // If over budget, add to Predictive Alerts
-          if (status !== 'OK') {
-            await sheets.spreadsheets.values.append({
-              spreadsheetId,
-              range: 'Predictive Alerts!A:E',
-              valueInputOption: "USER_ENTERED",
-              requestBody: {
-                values: [[
-                  transactionId,
-                  timestamp,
-                  'Budget Alert',
-                  `${category} is ${status}: ${remaining < 0 ? 'Overspent by' : 'Only'} $${Math.abs(remaining).toFixed(2)} ${remaining < 0 ? 'over budget' : 'remaining'}`,
-                  'Budget Tracking'
-                ]],
-              },
-            });
-            results.push({ sheet: 'Predictive Alerts', status: 'success', alert: status });
-          }
-        } else {
-          // Category doesn't exist, add it with default budget
-          await sheets.spreadsheets.values.append({
-            spreadsheetId,
-            range: 'Budget Tracking!A:E',
-            valueInputOption: "USER_ENTERED",
-            requestBody: {
-              values: [[
-                category,
-                '1000', // Default budget
-                amount,
-                (1000 - parseFloat(amount)).toString(),
-                'OK'
-              ]],
-            },
-          });
-        }
-        results.push({ sheet: 'Budget Tracking', status: 'success' });
-      } catch (budgetError) {
-        console.error('Error updating budget tracking:', budgetError);
-        results.push({ sheet: 'Budget Tracking', status: 'error', message: budgetError.message });
-      }
-    }
-  }
-  
-  // Process grocery receipt items
-  if (data.groceryItems && data.groceryItems.length > 0) {
-    try {
-      const store = data.store || 'Unknown Store';
-      const groceryRows = data.groceryItems.map(item => [
-        transactionId,
-        timestamp,
-        store,
-        item.name,
-        item.price
-      ]);
-      
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'Grocery Receipts!A:E',
-        valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: groceryRows,
-        },
-      });
-      results.push({ sheet: 'Grocery Receipts', status: 'success', itemCount: groceryRows.length });
-    } catch (groceryError) {
-      console.error('Error logging grocery items:', groceryError);
-      results.push({ sheet: 'Grocery Receipts', status: 'error', message: groceryError.message });
-    }
-  }
-  
-  // Process online transaction
-  if (data.onlineTransaction) {
-    try {
-      const { vendor, item, price } = data.onlineTransaction;
-      
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'Online Transactions!A:E',
-        valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [[
-            transactionId,
-            timestamp,
-            vendor,
-            item,
-            price
-          ]],
-        },
-      });
-      results.push({ sheet: 'Online Transactions', status: 'success' });
-    } catch (onlineError) {
-      console.error('Error logging online transaction:', onlineError);
-      results.push({ sheet: 'Online Transactions', status: 'error', message: onlineError.message });
-    }
-  }
-  
-  // Process credit card usage
-  if (data.creditUsage) {
-    try {
-      const { account, creditLimit, creditUsed } = data.creditUsage;
-      const remainingCredit = parseFloat(creditLimit) - parseFloat(creditUsed);
-      const utilizationPercent = (parseFloat(creditUsed) / parseFloat(creditLimit) * 100).toFixed(2);
-      
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'Credit Utilization!A:G',
-        valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [[
-            transactionId,
-            timestamp,
-            account,
-            creditLimit,
-            creditUsed,
-            remainingCredit,
-            utilizationPercent
-          ]],
-        },
-      });
-      
-      // Add alert if utilization is high
-      if (parseFloat(utilizationPercent) > 80) {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: 'Predictive Alerts!A:E',
-          valueInputOption: "USER_ENTERED",
-          requestBody: {
-            values: [[
-              transactionId,
-              timestamp,
-              'Credit Alert',
-              `High credit utilization (${utilizationPercent}%) on account ${account}`,
-              'Credit Utilization'
-            ]],
-          },
-        });
-        results.push({ sheet: 'Predictive Alerts', status: 'success', alert: 'High Credit Utilization' });
-      }
-      
-      results.push({ sheet: 'Credit Utilization', status: 'success' });
-    } catch (creditError) {
-      console.error('Error logging credit usage:', creditError);
-      results.push({ sheet: 'Credit Utilization', status: 'error', message: creditError.message });
-    }
-  }
-  
-  // Log token usage if provided
-  if (data.tokenUsage) {
-    try {
-      const { tokensUsed, estimatedCost, query } = data.tokenUsage;
-      
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'Token Usage!A:E',
-        valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [[
-            transactionId,
-            timestamp,
-            tokensUsed,
-            estimatedCost,
-            query
-          ]],
-        },
-      });
-      results.push({ sheet: 'Token Usage', status: 'success' });
-    } catch (tokenError) {
-      console.error('Error logging token usage:', tokenError);
-      results.push({ sheet: 'Token Usage', status: 'error', message: tokenError.message });
-    }
-  }
-  
-  return {
-    transactionId,
-    timestamp,
-    results
-  };
-};
-
-// Update OpenAPI specification to include finance endpoints
+// OpenAPI specification with userId instead of token
 app.get('/openapi.json', (req, res) => {
-  // Get the host from the request
-  const host = req.get('host');
-  const protocol = req.protocol;
-  const baseUrl = `${protocol}://${host}`;
-  
   // Serve a static OpenAPI specification
   const openApiSpec = {
     "openapi": "3.1.0",
     "info": {
-      "title": "Finance Tracker API",
-      "description": "API for logging financial data and chat conversations with Google Sheets",
+      "title": "Chat Logger API",
+      "description": "API for logging and retrieving chat conversations with Google Sheets",
       "version": "1.0.0"
     },
     "servers": [
       {
-        "url": baseUrl
+        "url": "https://gpt-to-sheet.onrender.com"
       }
     ],
     "components": {
@@ -1934,181 +1059,7 @@ app.get('/openapi.json', (req, res) => {
               "description": "ISO timestamp of the conversation"
             }
           },
-          "required": ["spreadsheetId", "userMessage", "assistantResponse"]
-        },
-        "ChatGPTLogRequest": {
-          "type": "object",
-          "properties": {
-            "spreadsheetId": {
-              "type": "string",
-              "description": "Google Spreadsheet ID"
-            },
-            "userMessage": {
-              "type": "string",
-              "description": "Message from the user"
-            },
-            "assistantResponse": {
-              "type": "string",
-              "description": "Response from the assistant"
-            }
-          },
-          "required": ["spreadsheetId", "userMessage", "assistantResponse"]
-        },
-        "GroceryItem": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "Item name"
-            },
-            "price": {
-              "type": "string",
-              "description": "Item price"
-            }
-          },
-          "required": ["name", "price"]
-        },
-        "OnlineTransaction": {
-          "type": "object",
-          "properties": {
-            "vendor": {
-              "type": "string",
-              "description": "Vendor name"
-            },
-            "item": {
-              "type": "string",
-              "description": "Item purchased"
-            },
-            "price": {
-              "type": "string",
-              "description": "Purchase price"
-            }
-          },
-          "required": ["vendor", "price"]
-        },
-        "CreditUsage": {
-          "type": "object",
-          "properties": {
-            "account": {
-              "type": "string",
-              "description": "Credit card account"
-            },
-            "creditLimit": {
-              "type": "string",
-              "description": "Credit limit"
-            },
-            "creditUsed": {
-              "type": "string",
-              "description": "Amount of credit used"
-            }
-          },
-          "required": ["account", "creditLimit", "creditUsed"]
-        },
-        "TokenUsage": {
-          "type": "object",
-          "properties": {
-            "tokensUsed": {
-              "type": "string",
-              "description": "Number of tokens used"
-            },
-            "estimatedCost": {
-              "type": "string",
-              "description": "Estimated cost of token usage"
-            },
-            "query": {
-              "type": "string",
-              "description": "Original query that generated the token usage"
-            }
-          },
-          "required": ["tokensUsed", "estimatedCost"]
-        },
-        "Transaction": {
-          "type": "object",
-          "properties": {
-            "category": {
-              "type": "string",
-              "description": "Transaction category"
-            },
-            "subcategory": {
-              "type": "string",
-              "description": "Transaction subcategory"
-            },
-            "amount": {
-              "type": "string",
-              "description": "Transaction amount"
-            },
-            "type": {
-              "type": "string",
-              "description": "Transaction type (Income or Expense)"
-            },
-            "paymentMethod": {
-              "type": "string",
-              "description": "Payment method used"
-            },
-            "notes": {
-              "type": "string",
-              "description": "Additional notes"
-            }
-          },
-          "required": ["category", "amount", "type"]
-        },
-        "FinanceData": {
-          "type": "object",
-          "properties": {
-            "transaction": {
-              "$ref": "#/components/schemas/Transaction"
-            },
-            "groceryItems": {
-              "type": "array",
-              "description": "Itemized grocery receipt items",
-              "items": {
-                "$ref": "#/components/schemas/GroceryItem"
-              }
-            },
-            "onlineTransaction": {
-              "$ref": "#/components/schemas/OnlineTransaction"
-            },
-            "creditUsage": {
-              "$ref": "#/components/schemas/CreditUsage"
-            },
-            "tokenUsage": {
-              "$ref": "#/components/schemas/TokenUsage"
-            },
-            "store": {
-              "type": "string",
-              "description": "Store name for grocery receipts"
-            }
-          }
-        },
-        "FinanceTransactionRequest": {
-          "type": "object",
-          "properties": {
-            "spreadsheetId": {
-              "type": "string",
-              "description": "Google Spreadsheet ID"
-            },
-            "userId": {
-              "type": "string",
-              "description": "User ID for authentication"
-            },
-            "data": {
-              "$ref": "#/components/schemas/FinanceData"
-            }
-          },
-          "required": ["spreadsheetId", "data"]
-        },
-        "ChatGPTTransactionRequest": {
-          "type": "object",
-          "properties": {
-            "spreadsheetId": {
-              "type": "string",
-              "description": "Google Spreadsheet ID"
-            },
-            "data": {
-              "$ref": "#/components/schemas/FinanceData"
-            }
-          },
-          "required": ["spreadsheetId", "data"]
+          "required": ["spreadsheetId", "sheetName", "userMessage", "assistantResponse"]
         },
         "SheetDataRequest": {
           "type": "object",
@@ -2127,24 +1078,6 @@ app.get('/openapi.json', (req, res) => {
             }
           },
           "required": ["spreadsheetId"]
-        },
-        "SetupSheetsRequest": {
-          "type": "object",
-          "properties": {
-            "spreadsheetId": {
-              "type": "string",
-              "description": "Google Spreadsheet ID"
-            },
-            "userId": {
-              "type": "string",
-              "description": "User ID for authentication"
-            },
-            "email": {
-              "type": "string",
-              "description": "User email to associate with spreadsheet"
-            }
-          },
-          "required": ["spreadsheetId"]
         }
       },
       "securitySchemes": {
@@ -2152,8 +1085,8 @@ app.get('/openapi.json', (req, res) => {
           "type": "oauth2",
           "flows": {
             "authorizationCode": {
-              "authorizationUrl": `${baseUrl}/oauth/authorize`,
-              "tokenUrl": `${baseUrl}/oauth/token`,
+              "authorizationUrl": "https://gpt-to-sheet.onrender.com/oauth/authorize",
+              "tokenUrl": "https://gpt-to-sheet.onrender.com/oauth/token",
               "scopes": {
                 "https://www.googleapis.com/auth/spreadsheets": "Read and write access to Google Sheets"
               }
@@ -2162,6 +1095,11 @@ app.get('/openapi.json', (req, res) => {
         }
       }
     },
+    "security": [
+      {
+        "oauth2": ["https://www.googleapis.com/auth/spreadsheets"]
+      }
+    ],
     "paths": {
       "/api/log-data-v1": {
         "post": {
@@ -2180,169 +1118,6 @@ app.get('/openapi.json', (req, res) => {
           "responses": {
             "200": {
               "description": "Successfully logged the conversation"
-            }
-          }
-        }
-      },
-      "/api/chatgpt/log-conversation": {
-        "post": {
-          "summary": "Log chat conversation (ChatGPT simplified endpoint)",
-          "operationId": "logChatGPT",
-          "description": "Simplified endpoint for ChatGPT to log conversations without OAuth",
-          "security": [],
-          "requestBody": {
-            "required": true,
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatGPTLogRequest"
-                }
-              }
-            }
-          },
-          "responses": {
-            "200": {
-              "description": "Successfully logged the conversation",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "type": "object",
-                    "properties": {
-                      "message": {
-                        "type": "string",
-                        "description": "Success message"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "400": {
-              "description": "Bad request - missing required fields"
-            },
-            "500": {
-              "description": "Server error"
-            }
-          }
-        }
-      },
-      "/api/chatgpt/get-user-id": {
-        "post": {
-          "summary": "Get a temporary user ID for ChatGPT",
-          "operationId": "getChatGPTUserId",
-          "description": "Creates a temporary user ID for ChatGPT to use with other endpoints",
-          "security": [],
-          "responses": {
-            "200": {
-              "description": "Successfully created a temporary user ID",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "type": "object",
-                    "properties": {
-                      "userId": {
-                        "type": "string",
-                        "description": "Temporary user ID"
-                      },
-                      "message": {
-                        "type": "string",
-                        "description": "Success message"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "500": {
-              "description": "Server error"
-            }
-          }
-        }
-      },
-      "/api/chatgpt/log-transaction": {
-        "post": {
-          "summary": "Log financial transaction (ChatGPT simplified endpoint)",
-          "operationId": "logTransactionChatGPT",
-          "description": "Simplified endpoint for ChatGPT to log financial transactions without OAuth",
-          "security": [],
-          "requestBody": {
-            "required": true,
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatGPTTransactionRequest"
-                }
-              }
-            }
-          },
-          "responses": {
-            "200": {
-              "description": "Successfully logged the transaction",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "type": "object",
-                    "properties": {
-                      "message": {
-                        "type": "string",
-                        "description": "Success message"
-                      },
-                      "transactionId": {
-                        "type": "string",
-                        "description": "Unique transaction ID"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "400": {
-              "description": "Bad request - missing required fields"
-            },
-            "500": {
-              "description": "Server error"
-            }
-          }
-        }
-      },
-      "/api/finance/log-transaction": {
-        "post": {
-          "summary": "Log financial transaction data",
-          "operationId": "logFinanceTransaction",
-          "requestBody": {
-            "required": true,
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FinanceTransactionRequest"
-                }
-              }
-            }
-          },
-          "responses": {
-            "200": {
-              "description": "Successfully processed financial transaction"
-            }
-          }
-        }
-      },
-      "/api/finance/setup-sheets": {
-        "post": {
-          "summary": "Setup all required finance sheets",
-          "operationId": "setupFinanceSheets",
-          "requestBody": {
-            "required": true,
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SetupSheetsRequest"
-                }
-              }
-            }
-          },
-          "responses": {
-            "200": {
-              "description": "Successfully set up finance sheets"
             }
           }
         }
@@ -2368,51 +1143,65 @@ app.get('/openapi.json', (req, res) => {
           }
         }
       },
-      "/auth/check-session": {
+      "/get-user-id": {
         "get": {
-          "summary": "Check if user is authenticated",
-          "operationId": "checkSession",
-          "parameters": [
-            {
-              "name": "userId",
-              "in": "query",
-              "required": false,
-              "schema": {
-                "type": "string"
-              }
-            }
-          ],
+          "summary": "Get user ID for an authenticated session",
+          "operationId": "getUserId",
+          "security": [{ "oauth2": ["https://www.googleapis.com/auth/spreadsheets"] }],
           "responses": {
             "200": {
-              "description": "Authentication status and user preferences"
-            }
-          }
-        }
-      },
-      "/api/plugin/check": {
-        "get": {
-          "summary": "Check if the plugin is working",
-          "operationId": "checkPlugin",
-          "security": [],
-          "responses": {
-            "200": {
-              "description": "Plugin status",
+              "description": "Successfully retrieved user ID",
               "content": {
                 "application/json": {
                   "schema": {
                     "type": "object",
                     "properties": {
-                      "status": {
+                      "user_id": {
                         "type": "string",
-                        "description": "Status of the plugin"
+                        "description": "User ID to use with other API endpoints"
                       },
                       "message": {
-                        "type": "string",
-                        "description": "Status message"
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/auth/check-session": {
+        "get": {
+          "summary": "Check if a recent authentication exists",
+          "operationId": "checkAuthSession",
+          "parameters": [
+            {
+              "name": "session",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "type": "string"
+              },
+              "description": "Session identifier (optional)"
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Authentication check successful",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "authenticated": {
+                        "type": "boolean"
                       },
-                      "timestamp": {
-                        "type": "string",
-                        "description": "Current timestamp"
+                      "userId": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
                       }
                     }
                   }
@@ -2499,896 +1288,4 @@ app.listen(PORT, () => {
 
 // Export app for testing
 module.exports = app;
-
-// Add a specific endpoint for ChatGPT plugin debugging
-app.get('/chatgpt-debug', (req, res) => {
-  res.send(`
-    <html>
-      <head>
-        <title>ChatGPT Plugin Debug</title>
-        <style>
-          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-          .debug-box { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; }
-          pre { white-space: pre-wrap; word-break: break-all; }
-          .section { border-left: 4px solid #4285f4; padding-left: 15px; margin: 20px 0; }
-          h2 { color: #4285f4; }
-        </style>
-      </head>
-      <body>
-        <h1>ChatGPT Plugin Debug Information</h1>
-        
-        <div class="section">
-          <h2>Environment</h2>
-          <p>Node Environment: ${process.env.NODE_ENV || 'development'}</p>
-          <p>Server URL: ${process.env.GOOGLE_REDIRECT_URI ? process.env.GOOGLE_REDIRECT_URI.split('/auth')[0] : 'Not configured'}</p>
-        </div>
-        
-        <div class="section">
-          <h2>OAuth Configuration</h2>
-          <p>Redirect URI: ${process.env.GOOGLE_REDIRECT_URI || 'Not configured'}</p>
-          <p>Client ID: ${process.env.GOOGLE_CLIENT_ID ? '✓ Configured' : '✗ Missing'}</p>
-          <p>Client Secret: ${process.env.GOOGLE_CLIENT_SECRET ? '✓ Configured' : '✗ Missing'}</p>
-        </div>
-        
-        <div class="section">
-          <h2>Database Status</h2>
-          <p>Database URL: ${process.env.DATABASE_URL ? '✓ Configured' : '✗ Missing'}</p>
-        </div>
-        
-        <div class="section">
-          <h2>Recent Authentication Activity</h2>
-          <div id="recent-auth">Loading...</div>
-        </div>
-        
-        <div class="section">
-          <h2>Test OAuth Flow</h2>
-          <p>Click the button below to test the OAuth flow:</p>
-          <button id="test-oauth">Test OAuth Flow</button>
-          <div id="oauth-result" style="margin-top: 10px;"></div>
-        </div>
-        
-        <script>
-          // Fetch recent authentication activity
-          fetch('/api/debug/recent-auth')
-            .then(response => response.json())
-            .then(data => {
-              document.getElementById('recent-auth').innerHTML = 
-                data.recentAuth.length > 0 
-                  ? '<pre>' + JSON.stringify(data.recentAuth, null, 2) + '</pre>'
-                  : '<p>No recent authentication activity</p>';
-            })
-            .catch(error => {
-              document.getElementById('recent-auth').innerHTML = 
-                '<p>Error fetching authentication data: ' + error.message + '</p>';
-            });
-          
-          // Test OAuth flow
-          document.getElementById('test-oauth').addEventListener('click', function() {
-            const resultDiv = document.getElementById('oauth-result');
-            resultDiv.innerHTML = '<p>Initiating OAuth test...</p>';
-            
-            fetch('/api/debug/test-oauth')
-              .then(response => response.json())
-              .then(data => {
-                if (data.url) {
-                  resultDiv.innerHTML = '<p>Redirecting to OAuth URL...</p>';
-                  window.location.href = data.url;
-                } else {
-                  resultDiv.innerHTML = '<p>Error: ' + (data.error || 'Unknown error') + '</p>';
-                }
-              })
-              .catch(error => {
-                resultDiv.innerHTML = '<p>Error: ' + error.message + '</p>';
-              });
-          });
-        </script>
-      </body>
-    </html>
-  `);
-});
-
-// Debug endpoint to get recent authentication activity
-app.get('/api/debug/recent-auth', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT user_id, email, created_at, last_used FROM auth_tokens ORDER BY last_used DESC LIMIT 5'
-    );
-    
-    // Redact sensitive information
-    const recentAuth = result.rows.map(row => ({
-      user_id: row.user_id.substring(0, 8) + '...',
-      email: row.email ? row.email.split('@')[0] + '@...' : null,
-      created_at: row.created_at,
-      last_used: row.last_used
-    }));
-    
-    res.json({ recentAuth });
-  } catch (error) {
-    console.error('Error fetching recent auth:', error);
-    res.status(500).json({ error: 'Failed to fetch recent authentication data' });
-  }
-});
-
-// Debug endpoint to test OAuth flow
-app.get('/api/debug/test-oauth', (req, res) => {
-  try {
-    const oauth2Client = createOAuth2Client();
-    const testState = 'debug-' + crypto.randomBytes(8).toString('hex');
-    
-    const authUrl = oauth2Client.generateAuthUrl({
-      access_type: "offline",
-      scope: ["https://www.googleapis.com/auth/spreadsheets"],
-      prompt: 'consent',
-      state: testState
-    });
-    
-    res.json({ url: authUrl });
-  } catch (error) {
-    console.error('Error generating test OAuth URL:', error);
-    res.status(500).json({ error: 'Failed to generate OAuth URL' });
-  }
-});
-
-// Add a specific endpoint for ChatGPT plugin to check connection
-app.get('/api/plugin/check', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'GPT to Sheet plugin is connected and working',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Add a specific endpoint for ChatGPT plugin to get user ID
-app.get('/api/plugin/get-user-id', async (req, res) => {
-  const authHeader = req.get('Authorization');
-  
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ 
-      error: 'No authorization token provided',
-      message: 'Please authenticate with Google first'
-    });
-  }
-  
-  const token = authHeader.substring(7);
-  
-  try {
-    // Try to get or create user ID for this token
-    const userId = await getUserIdByAccessToken(token);
-    
-    if (!userId) {
-      return res.status(401).json({ 
-        error: 'Failed to identify user',
-        message: 'Could not find or create user ID for the provided token'
-      });
-    }
-    
-    // Update last used timestamp
-    try {
-      await pool.query(
-        'UPDATE auth_tokens SET last_used = CURRENT_TIMESTAMP WHERE user_id = $1',
-        [userId]
-      );
-    } catch (dbError) {
-      console.error('Error updating last used timestamp:', dbError);
-      // Continue anyway
-    }
-    
-    return res.json({
-      userId: userId,
-      message: 'User ID retrieved successfully'
-    });
-  } catch (error) {
-    console.error('Error getting user ID for plugin:', error);
-    return res.status(500).json({ 
-      error: 'Failed to process authentication',
-      message: error.message
-    });
-  }
-});
-
-// Add a ChatGPT-specific plugin manifest endpoint
-app.get('/.well-known/ai-plugin.json', (req, res) => {
-  const host = req.get('host');
-  const protocol = req.protocol;
-  const baseUrl = `${protocol}://${host}`;
-  
-  const manifest = {
-    "schema_version": "v1",
-    "name_for_human": "Finance Tracker & Sheet Logger",
-    "name_for_model": "finance_tracker",
-    "description_for_human": "Track finances and log conversations to Google Sheets. Manage budgets, expenses, and keep records of important financial data.",
-    "description_for_model": "This plugin helps users track financial data and log conversations to Google Sheets. It can log transactions, track budgets, categorize expenses, and store itemized receipts. It also provides a way to log chat conversations for future reference.",
-    "auth": {
-      "type": "none"
-    },
-    "api": {
-      "type": "openapi",
-      "url": `${baseUrl}/openapi.json`
-    },
-    "logo_url": `${baseUrl}/logo.png`,
-    "contact_email": "support@example.com",
-    "legal_info_url": `${baseUrl}/legal`
-  };
-  
-  res.json(manifest);
-});
-
-// Add a simple logo endpoint
-app.get('/logo.png', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'logo.png'));
-});
-
-// Add a legal info page
-app.get('/legal', (req, res) => {
-  res.send(`
-    <html>
-      <head>
-        <title>Legal Information</title>
-        <style>
-          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        </style>
-      </head>
-      <body>
-        <h1>Legal Information</h1>
-        <p>This service is provided for demonstration purposes.</p>
-        <p>By using this service, you agree to Google's Terms of Service for the Google Sheets API.</p>
-      </body>
-    </html>
-  `);
-});
-
-// Add a specific endpoint for ChatGPT to get a user ID directly
-app.post('/api/chatgpt/get-user-id', async (req, res) => {
-  console.log('ChatGPT get-user-id request received:', {
-    headers: {
-      authorization: req.headers.authorization ? 'Bearer [REDACTED]' : undefined,
-      'content-type': req.headers['content-type']
-    },
-    body: req.body
-  });
-  
-  // Generate a temporary user ID if nothing else works
-  const tempUserId = `temp_${crypto.randomBytes(8).toString('hex')}`;
-  
-  try {
-    global.tempUsers = global.tempUsers || {};
-    global.tempUsers[tempUserId] = {
-      created: new Date().toISOString()
-    };
-    
-    console.log(`Created temporary user ID: ${tempUserId}`);
-    
-    return res.json({
-      userId: tempUserId,
-      message: 'Temporary user ID created successfully'
-    });
-  } catch (error) {
-    console.error('Error creating temporary user ID:', error);
-    return res.status(500).json({ 
-      error: 'Failed to create user ID',
-      message: error.message
-    });
-  }
-});
-
-// Add a simplified logging endpoint specifically for ChatGPT
-app.post('/api/chatgpt/log-conversation', async (req, res) => {
-  console.log('ChatGPT log-conversation request received');
-  
-  const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
-  
-  if (!spreadsheetId) {
-    console.error('Log attempt failed: No spreadsheetId provided');
-    return res.status(400).json({ error: "spreadsheetId is required" });
-  }
-  
-  if (!userMessage || !assistantResponse) {
-    console.error('Log attempt failed: Missing message content');
-    return res.status(400).json({ error: "userMessage and assistantResponse are required" });
-  }
-  
-  try {
-    // Create OAuth client directly with environment variables
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    );
-    
-    // Use service account if available, otherwise try client credentials
-    let token;
-    try {
-      // Try to use client credentials flow
-      const response = await oauth2Client.getAccessToken();
-      token = response.token;
-      
-      if (!token) {
-        throw new Error('No token from client credentials');
-      }
-    } catch (authError) {
-      console.error('Client credentials auth failed:', authError);
-      
-      // Fall back to a temporary token for demo purposes
-      // In production, you should use proper authentication
-      token = 'temporary_token_for_demo';
-      console.log('Using temporary token for demo purposes');
-    }
-    
-    oauth2Client.setCredentials({ access_token: token });
-    
-    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
-    const sheetName = "Data"; // Default to "Data"
-    
-    console.log(`Writing to sheet "${sheetName}" in spreadsheet "${spreadsheetId}"`);
-    
-    // First check if the sheet exists, create it if it doesn't
-    try {
-      await sheets.spreadsheets.get({
-        spreadsheetId,
-        ranges: [`${sheetName}!A1`]
-      });
-      console.log(`Sheet "${sheetName}" exists`);
-    } catch (sheetError) {
-      if (sheetError.code === 404 || sheetError.message.includes('not found')) {
-        console.log(`Sheet "${sheetName}" doesn't exist, creating it`);
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId,
-          resource: {
-            requests: [{
-              addSheet: {
-                properties: {
-                  title: sheetName
-                }
-              }
-            }]
-          }
-        });
-        
-        await sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: `${sheetName}!A1:C1`,
-          valueInputOption: "USER_ENTERED",
-          resource: {
-            values: [["User Message", "Assistant Response", "Timestamp"]]
-          }
-        });
-        console.log(`Created sheet "${sheetName}" with headers`);
-      } else {
-        throw sheetError;
-      }
-    }
-    
-    // Now append the data
-    const appendResponse = await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${sheetName}!A:C`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[userMessage, assistantResponse, new Date().toISOString()]],
-      },
-    });
-    
-    console.log('Data logged successfully!');
-    res.json({ 
-      message: "Data logged successfully!", 
-      response: appendResponse.data
-    });
-  } catch (error) {
-    console.error("Logging error:", error);
-    
-    let errorMessage = "Failed to write to sheet";
-    let statusCode = 500;
-    
-    if (error.code === 403 || error.message.includes('permission')) {
-      errorMessage = "Permission denied to access the spreadsheet";
-      statusCode = 403;
-    } else if (error.code === 404 || error.message.includes('not found')) {
-      errorMessage = "Spreadsheet not found";
-      statusCode = 404;
-    }
-    
-    res.status(statusCode).json({ 
-      error: errorMessage, 
-      details: error.message,
-      code: error.code || 'UNKNOWN'
-    });
-  }
-});
-
-// Add a simplified finance transaction endpoint for ChatGPT
-app.post('/api/chatgpt/log-transaction', async (req, res) => {
-  console.log('ChatGPT log-transaction request received');
-  
-  const { spreadsheetId = DEFAULT_SPREADSHEET_ID, data } = req.body;
-  
-  if (!spreadsheetId) {
-    console.error('Log attempt failed: No spreadsheetId provided');
-    return res.status(400).json({ error: "spreadsheetId is required" });
-  }
-  
-  if (!data) {
-    console.error('Log attempt failed: No transaction data provided');
-    return res.status(400).json({ error: "data is required" });
-  }
-  
-  try {
-    // Create OAuth client directly with environment variables
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    );
-    
-    // Use service account if available, otherwise try client credentials
-    let token;
-    try {
-      // Try to use client credentials flow
-      const response = await oauth2Client.getAccessToken();
-      token = response.token;
-      
-      if (!token) {
-        throw new Error('No token from client credentials');
-      }
-    } catch (authError) {
-      console.error('Client credentials auth failed:', authError);
-      
-      // Fall back to a temporary token for demo purposes
-      // In production, you should use proper authentication
-      token = 'temporary_token_for_demo';
-      console.log('Using temporary token for demo purposes');
-    }
-    
-    oauth2Client.setCredentials({ access_token: token });
-    
-    const sheets = google.sheets({ version: "v4", auth: oauth2Client });
-    
-    // Setup all required sheets
-    await setupFinanceSheets(sheets, spreadsheetId);
-    
-    // Process the financial data
-    const result = await processFinancialData(sheets, spreadsheetId, data);
-    
-    console.log('Transaction logged successfully!');
-    res.json({ 
-      message: "Transaction logged successfully!", 
-      transactionId: result.transactionId,
-      timestamp: result.timestamp,
-      results: result.results
-    });
-  } catch (error) {
-    console.error("Transaction logging error:", error);
-    
-    let errorMessage = "Failed to log transaction";
-    let statusCode = 500;
-    
-    if (error.code === 403 || error.message.includes('permission')) {
-      errorMessage = "Permission denied to access the spreadsheet";
-      statusCode = 403;
-    } else if (error.code === 404 || error.message.includes('not found')) {
-      errorMessage = "Spreadsheet not found";
-      statusCode = 404;
-    }
-    
-    res.status(statusCode).json({ 
-      error: errorMessage, 
-      details: error.message,
-      code: error.code || 'UNKNOWN'
-    });
-  }
-});
-
-// Add a helper function to generate transaction IDs
-const generateTransactionId = () => {
-  return `tx_${crypto.randomBytes(8).toString('hex')}`;
-};
-
-// Create public directory if it doesn't exist
-const publicDir = path.join(__dirname, 'public');
-if (!fs.existsSync(publicDir)) {
-  fs.mkdirSync(publicDir, { recursive: true });
-  console.log('Created public directory');
-}
-
-// Create a simple logo file if it doesn't exist
-const logoPath = path.join(publicDir, 'logo.png');
-if (!fs.existsSync(logoPath)) {
-  // This is a very simple 1x1 pixel PNG file (base64 encoded)
-  const logoBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAACXBIWXMAAAsTAAALEwEAmpwYAAABFUlEQVR42u3BMQEAAADCoPVP7WsIoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeAMBPAAB9RbmzwAAAABJRU5ErkJggg==';
-  const logoBuffer = Buffer.from(logoBase64, 'base64');
-  fs.writeFileSync(logoPath, logoBuffer);
-  console.log('Created default logo.png');
-}
-
-// Add a new endpoint to get the default spreadsheet ID
-app.get('/api/default-spreadsheet', (req, res) => {
-  res.json({
-    spreadsheetId: DEFAULT_SPREADSHEET_ID,
-    url: `https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit`,
-    message: 'This is the default spreadsheet used when no spreadsheet ID is provided'
-  });
-});
-
-// FIX 1: Add the missing /api/chatgpt/log-conversation endpoint
-app.post('/api/chatgpt/log-conversation', async (req, res) => {
-  console.log('[FIX 1] Attempting to log conversation via ChatGPT endpoint');
-  try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
-    
-    if (!userMessage || !assistantResponse) {
-      console.log('[FIX 1] Failed: Missing required fields');
-      // Don't return error yet, let the next fix try
-      throw new Error('Missing required fields: userMessage and assistantResponse are required');
-    }
-    
-    // Get a temporary user ID for this request
-    const tempUserId = generateUserId();
-    console.log(`[FIX 1] Generated temporary user ID: ${tempUserId}`);
-    
-    // Create OAuth client
-    const oauth2Client = createOAuth2Client();
-    
-    // Use service account for direct access
-    try {
-      // Initialize service account auth
-      const auth = new google.auth.GoogleAuth({
-        keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './service-account-key.json',
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
-      
-      const authClient = await auth.getClient();
-      const sheets = google.sheets({ version: 'v4', auth: authClient });
-      
-      // Append data to the sheet
-      const timestamp = new Date().toISOString();
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'Data!A:C',
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        resource: {
-          values: [[userMessage, assistantResponse, timestamp]],
-        },
-      });
-      
-      console.log('[FIX 1] Success: Logged conversation using service account');
-      return res.status(200).json({ 
-        message: 'Successfully logged conversation using service account',
-        userId: tempUserId
-      });
-    } catch (serviceAccountError) {
-      console.error('[FIX 1] Service account error:', serviceAccountError.message);
-      // Continue to next fallback
-    }
-    
-    // If we get here, FIX 1 failed, throw to trigger FIX 2
-    throw new Error('Service account authentication failed');
-    
-  } catch (error) {
-    console.error('[FIX 1] Failed:', error.message);
-    // Don't return error, let the next fix try
-    return next();
-  }
-});
-
-// FIX 2: Fallback to /api/log-data-v1 endpoint
-app.post('/api/chatgpt/log-conversation', async (req, res, next) => {
-  console.log('[FIX 2] Attempting to log conversation via log-data-v1 fallback');
-  try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
-    
-    if (!userMessage || !assistantResponse) {
-      console.log('[FIX 2] Failed: Missing required fields');
-      // Don't return error yet, let the next fix try
-      throw new Error('Missing required fields');
-    }
-    
-    // Forward to the log-data-v1 endpoint internally
-    try {
-      // Create a temporary access token
-      const tempToken = crypto.randomBytes(16).toString('hex');
-      
-      // Store this token temporarily
-      if (!global.tokenCache) global.tokenCache = {};
-      global.tokenCache[tempToken] = {
-        access_token: tempToken,
-        refresh_token: null,
-        expiry_date: Date.now() + 3600000 // 1 hour from now
-      };
-      
-      console.log(`[FIX 2] Created temporary token: ${tempToken}`);
-      
-      // Call the existing log-data-v1 endpoint logic directly
-      const oauth2Client = createOAuth2Client();
-      oauth2Client.setCredentials({
-        access_token: tempToken
-      });
-      
-      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
-      
-      // Append data to the sheet
-      const timestamp = new Date().toISOString();
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'Data!A:C',
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        resource: {
-          values: [[userMessage, assistantResponse, timestamp]],
-        },
-      });
-      
-      console.log('[FIX 2] Success: Logged conversation using temporary token');
-      return res.status(200).json({ 
-        message: 'Successfully logged conversation using temporary token',
-        token: tempToken.substring(0, 8) + '...' // Only show part of the token for security
-      });
-    } catch (logDataError) {
-      console.error('[FIX 2] log-data-v1 error:', logDataError.message);
-      // Continue to next fallback
-    }
-    
-    // If we get here, FIX 2 failed, throw to trigger FIX 3
-    throw new Error('log-data-v1 fallback failed');
-    
-  } catch (error) {
-    console.error('[FIX 2] Failed:', error.message);
-    // Don't return error, let the next fix try
-    return next();
-  }
-});
-
-// FIX 3: Direct Google Sheets API access with application default credentials
-app.post('/api/chatgpt/log-conversation', async (req, res, next) => {
-  console.log('[FIX 3] Attempting to log conversation via application default credentials');
-  try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
-    
-    if (!userMessage || !assistantResponse) {
-      console.log('[FIX 3] Failed: Missing required fields');
-      // Don't return error yet, let the next fix try
-      throw new Error('Missing required fields');
-    }
-    
-    try {
-      // Try to use application default credentials
-      const auth = new google.auth.GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
-      
-      const authClient = await auth.getClient();
-      const sheets = google.sheets({ version: 'v4', auth: authClient });
-      
-      // Append data to the sheet
-      const timestamp = new Date().toISOString();
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'Data!A:C',
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        resource: {
-          values: [[userMessage, assistantResponse, timestamp]],
-        },
-      });
-      
-      console.log('[FIX 3] Success: Logged conversation using application default credentials');
-      return res.status(200).json({ 
-        message: 'Successfully logged conversation using application default credentials'
-      });
-    } catch (adcError) {
-      console.error('[FIX 3] Application default credentials error:', adcError.message);
-      // Continue to next fallback
-    }
-    
-    // If we get here, FIX 3 failed, throw to trigger FIX 4
-    throw new Error('Application default credentials failed');
-    
-  } catch (error) {
-    console.error('[FIX 3] Failed:', error.message);
-    // Don't return error, let the next fix try
-    return next();
-  }
-});
-
-// FIX 4: Use file system to store the conversation locally, then sync later
-app.post('/api/chatgpt/log-conversation', async (req, res, next) => {
-  console.log('[FIX 4] Attempting to log conversation to file system for later sync');
-  try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
-    
-    if (!userMessage || !assistantResponse) {
-      console.log('[FIX 4] Failed: Missing required fields');
-      // Don't return error yet, let the next fix try
-      throw new Error('Missing required fields');
-    }
-    
-    try {
-      // Create a unique ID for this conversation
-      const conversationId = crypto.randomBytes(8).toString('hex');
-      
-      // Create a directory for pending conversations if it doesn't exist
-      const pendingDir = path.join(__dirname, 'pending_conversations');
-      if (!fs.existsSync(pendingDir)) {
-        fs.mkdirSync(pendingDir, { recursive: true });
-      }
-      
-      // Write the conversation to a file
-      const conversationData = {
-        id: conversationId,
-        spreadsheetId,
-        userMessage,
-        assistantResponse,
-        timestamp: new Date().toISOString(),
-        syncStatus: 'pending'
-      };
-      
-      fs.writeFileSync(
-        path.join(pendingDir, `conversation_${conversationId}.json`),
-        JSON.stringify(conversationData, null, 2)
-      );
-      
-      console.log(`[FIX 4] Success: Saved conversation to file system with ID: ${conversationId}`);
-      
-      // Schedule a background sync attempt (this won't block the response)
-      setTimeout(() => {
-        console.log(`[FIX 4] Attempting background sync for conversation: ${conversationId}`);
-        // This would attempt to sync the conversation with Google Sheets
-        // Implementation details omitted for brevity
-      }, 5000);
-      
-      return res.status(200).json({ 
-        message: 'Successfully saved conversation locally, will sync to Google Sheets when possible',
-        conversationId
-      });
-    } catch (fsError) {
-      console.error('[FIX 4] File system error:', fsError.message);
-      // Continue to next fallback
-    }
-    
-    // If we get here, FIX 4 failed, throw to trigger FIX 5
-    throw new Error('File system storage failed');
-    
-  } catch (error) {
-    console.error('[FIX 4] Failed:', error.message);
-    // Don't return error, let the next fix try
-    return next();
-  }
-});
-
-// FIX 5: Last resort - store in memory and return success, log to database
-app.post('/api/chatgpt/log-conversation', async (req, res) => {
-  console.log('[FIX 5] Last resort: Storing conversation in memory');
-  try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, userMessage, assistantResponse } = req.body;
-    
-    // Initialize in-memory storage if it doesn't exist
-    if (!global.pendingConversations) global.pendingConversations = [];
-    
-    // Generate a conversation ID
-    const conversationId = crypto.randomBytes(8).toString('hex');
-    
-    // Store the conversation in memory
-    global.pendingConversations.push({
-      id: conversationId,
-      spreadsheetId,
-      userMessage: userMessage || '(No user message provided)',
-      assistantResponse: assistantResponse || '(No assistant response provided)',
-      timestamp: new Date().toISOString(),
-      attempts: 0
-    });
-    
-    console.log(`[FIX 5] Stored conversation in memory with ID: ${conversationId}`);
-    
-    // Try to log to database if available
-    try {
-      if (pool) {
-        await pool.query(
-          'INSERT INTO pending_conversations (id, spreadsheet_id, user_message, assistant_response, created_at) VALUES ($1, $2, $3, $4, NOW())',
-          [conversationId, spreadsheetId, userMessage || '', assistantResponse || '']
-        );
-        console.log(`[FIX 5] Also logged to database with ID: ${conversationId}`);
-      }
-    } catch (dbError) {
-      console.error('[FIX 5] Database logging error (non-fatal):', dbError.message);
-    }
-    
-    // Always return success at this point - we've stored it somewhere
-    return res.status(200).json({ 
-      message: 'Successfully stored conversation for later processing',
-      conversationId,
-      note: 'This conversation will be synced to Google Sheets when the system is able to connect'
-    });
-    
-  } catch (error) {
-    // This is the absolute last resort - log the error but still return success
-    console.error('[FIX 5] Critical error in last resort handler:', error.message);
-    return res.status(200).json({ 
-      message: 'Conversation received, but encountered issues with storage',
-      error: process.env.NODE_ENV === 'production' ? 'Internal server error' : error.message,
-      success: false
-    });
-  }
-});
-
-// Add a background worker to process pending conversations
-setInterval(async () => {
-  try {
-    // Skip if no pending conversations
-    if (!global.pendingConversations || global.pendingConversations.length === 0) return;
-    
-    console.log(`Background worker: Processing ${global.pendingConversations.length} pending conversations`);
-    
-    // Process each conversation
-    for (let i = 0; i < global.pendingConversations.length; i++) {
-      const conversation = global.pendingConversations[i];
-      
-      // Skip if too many attempts
-      if (conversation.attempts >= 5) {
-        console.log(`Skipping conversation ${conversation.id} - too many attempts (${conversation.attempts})`);
-        continue;
-      }
-      
-      // Increment attempt counter
-      conversation.attempts++;
-      
-      try {
-        // Try to use service account
-        const auth = new google.auth.GoogleAuth({
-          keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './service-account-key.json',
-          scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-        });
-        
-        const authClient = await auth.getClient();
-        const sheets = google.sheets({ version: 'v4', auth: authClient });
-        
-        // Append data to the sheet
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: conversation.spreadsheetId,
-          range: 'Data!A:C',
-          valueInputOption: 'USER_ENTERED',
-          insertDataOption: 'INSERT_ROWS',
-          resource: {
-            values: [[conversation.userMessage, conversation.assistantResponse, conversation.timestamp]],
-          },
-        });
-        
-        console.log(`Successfully synced conversation ${conversation.id} on attempt ${conversation.attempts}`);
-        
-        // Remove from pending list
-        global.pendingConversations.splice(i, 1);
-        i--; // Adjust index since we removed an item
-        
-        // Update database if available
-        if (pool) {
-          await pool.query(
-            'UPDATE pending_conversations SET synced = TRUE, synced_at = NOW() WHERE id = $1',
-            [conversation.id]
-          );
-        }
-      } catch (error) {
-        console.error(`Failed to sync conversation ${conversation.id} on attempt ${conversation.attempts}:`, error.message);
-      }
-    }
-  } catch (error) {
-    console.error('Error in background worker:', error.message);
-  }
-}, 60000); // Run every minute
-
-// Add a new endpoint to check the status of the ChatGPT integration
-app.get('/api/chatgpt/status', (req, res) => {
-  // Count pending conversations
-  const pendingCount = global.pendingConversations ? global.pendingConversations.length : 0;
-  
-  // Check if we have a service account key
-  const hasServiceAccount = fs.existsSync(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './service-account-key.json');
-  
-  // Return status information
-  res.json({
-    status: 'operational',
-    pendingConversations: pendingCount,
-    hasServiceAccount,
-    defaultSpreadsheetId: DEFAULT_SPREADSHEET_ID,
-    defaultSpreadsheetUrl: `https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit`,
-    timestamp: new Date().toISOString()
-  });
-});
 

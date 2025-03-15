@@ -218,40 +218,27 @@ const pool = new Pool({
 // Constants and file paths
 const USERS_FILE = path.join(__dirname, 'users.json');
 
-// Database initialization function
-const initDatabase = async () => {
+// Import the database module
+const { initDatabase, ensureUsersTable } = require('./db');
+
+// Initialize the database before starting the server
+(async () => {
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS auth_tokens (
-        user_id TEXT PRIMARY KEY,
-        access_token TEXT NOT NULL,
-        refresh_token TEXT NOT NULL,
-        token_expiry TIMESTAMP NOT NULL,
-        email TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    // Add user_preferences table to store spreadsheet associations and settings
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_preferences (
-        email TEXT PRIMARY KEY,
-        default_spreadsheet_id TEXT,
-        default_categories JSONB,
-        budget_limits JSONB,
-        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+    console.log('Initializing database...');
+    await initDatabase();
+    await ensureUsersTable();
+    console.log('Database initialization complete');
     
-    console.log('Database initialized successfully');
+    // Start the server only after database is initialized
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   } catch (error) {
-    console.error('Error initializing database:', error);
+    console.error('Failed to initialize database:', error);
+    process.exit(1);
   }
-};
-
-// Initialize database on startup
-initDatabase().catch(console.error);
+})();
 
 // Helper function to get tokens from all possible storage methods
 const getTokensFromDB = async (userId) => {

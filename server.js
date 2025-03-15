@@ -539,17 +539,20 @@ app.post('/oauth/token', async (req, res) => {
 
 // Step 1: Generate user ID and redirect to Google OAuth
 app.get("/auth", (req, res) => {
-  const userId = generateUserId();
   const oauth2Client = createOAuth2Client();
+  const userId = generateUserId();
   
-  // Store the user ID in the state parameter
-  const state = userId;
+  // Generate a URL that asks for permissions for Google Sheets and basic profile info
+  const scopes = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/userinfo.email' // Add email scope
+  ];
   
   const authUrl = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: ["https://www.googleapis.com/auth/spreadsheets"],
-    prompt: 'consent',
-    state: state // Pass user ID as state
+    access_type: 'offline',
+    scope: scopes,
+    state: userId,
+    prompt: 'consent'
   });
   
   res.redirect(authUrl);
@@ -557,17 +560,20 @@ app.get("/auth", (req, res) => {
 
 // SSO authentication route
 app.get("/auth/sso", (req, res) => {
-  const userId = generateUserId();
   const oauth2Client = createOAuth2Client();
+  const userId = generateUserId();
   
-  // Store the user ID in session for SSO flow
-  req.session.userId = userId;
+  // Generate a URL that asks for permissions for Google Sheets and basic profile info
+  const scopes = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/userinfo.email' // Add email scope
+  ];
   
   const authUrl = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: ["https://www.googleapis.com/auth/spreadsheets"],
-    prompt: 'consent',
-    state: userId
+    access_type: 'offline',
+    scope: scopes,
+    state: userId,
+    prompt: 'consent'
   });
   
   res.redirect(authUrl);
@@ -575,105 +581,97 @@ app.get("/auth/sso", (req, res) => {
 
 // Auth callback that stores tokens, email, and returns user ID
 app.get("/auth/callback", async (req, res) => {
-  console.log('Auth callback received with query params:', req.query);
-  
-  const { code, state, error } = req.query;
-  
-  // Check for OAuth errors
-  if (error) {
-    console.error('OAuth error returned in callback:', error, req.query.error_description);
-    return res.redirect(`/auth-error?error=${encodeURIComponent(error)}&description=${encodeURIComponent(req.query.error_description || '')}`);
-  }
-  
-  if (!code) {
-    console.error('No authorization code in callback');
-    return res.redirect('/auth-error?error=no_code&description=No+authorization+code+received');
-  }
-  
-  if (!state) {
-    console.warn('No state parameter in callback - this may cause issues with ChatGPT plugin flow');
-  }
-  
-  const userId = state; // Retrieve user ID from state
-  console.log(`Using state as userId: ${userId}`);
-  
   try {
-    const oauth2Client = createOAuth2Client();
+    console.log('Auth callback received with query params:', req.query);
     
-    let tokens;
-    try {
-      const tokenResponse = await oauth2Client.getToken(code);
-      tokens = tokenResponse.tokens;
-      console.log('Successfully exchanged code for tokens');
-    } catch (tokenError) {
-      console.error('Error exchanging code for tokens:', tokenError);
-      return res.redirect(`/auth-error?error=token_exchange&description=${encodeURIComponent(tokenError.message)}`);
+    const { code, state } = req.query;
+    
+    if (!code) {
+      return res.status(400).send('Authorization code is missing');
     }
     
-    // Get user email from Google API
+    // Use the state parameter as the userId
+    const userId = state;
+    console.log('Using state as userId:', userId);
+    
+    const oauth2Client = createOAuth2Client();
+    
+    // Exchange the authorization code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    console.log('Successfully exchanged code for tokens');
+    
+    // Store the tokens
+    await storeAccessToken(tokens.access_token, tokens.refresh_token, tokens.expiry_date);
+    
+    // Try to get user email, but don't fail if it's not available
     let userEmail = null;
     try {
       oauth2Client.setCredentials(tokens);
-      const people = google.people({ version: 'v1', auth: oauth2Client });
-      const profile = await people.people.get({
-        resourceName: 'people/me',
-        personFields: 'emailAddresses',
+      
+      // Use the userinfo endpoint instead of People API
+      const userInfoResponse = await axios.get('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`
+        }
       });
       
-      if (profile.data.emailAddresses && profile.data.emailAddresses.length > 0) {
-        userEmail = profile.data.emailAddresses[0].value;
-        console.log(`Retrieved email: ${userEmail} for user ${userId}`);
-      }
+      userEmail = userInfoResponse.data.email;
+      console.log('Retrieved user email:', userEmail);
     } catch (emailError) {
-      console.error('Error retrieving user email:', emailError);
-      // Continue without email if retrieval fails
+      console.error('Error retrieving user email:', emailError.message);
+      // Continue without email - it's not critical
     }
     
-    // Save tokens with user ID
-    const users = readUsers();
-    users[userId] = {
-      tokens: tokens,
+    // Save the user with or without email
+    const user = {
+      id: userId,
       email: userEmail,
-      created: new Date().toISOString()
+      tokens: {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expiry_date: tokens.expiry_date
+      }
     };
+    
+    // Save to file storage
+    const users = readUsers();
+    users[userId] = user;
     saveUsers(users);
     console.log(`Saved user ${userId} to file storage`);
     
-    // For SSO flow, store in session and cookie
-    if (req.session.userId === userId) {
-      // Set a persistent cookie
-      res.cookie('gpt_sheet_user_id', userId, {
-        maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
-        httpOnly: false, // Allow JavaScript access
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax'
-      });
-      console.log(`Set cookie for SSO user ${userId}`);
-      
-      // Store tokens in database for SSO
-      try {
+    // Also store in database if available
+    try {
+      if (pool) {
         await pool.query(
-          'INSERT INTO auth_tokens(user_id, access_token, refresh_token, token_expiry, email) VALUES($1, $2, $3, $4, $5) ' +
-          'ON CONFLICT (user_id) DO UPDATE SET access_token = $2, refresh_token = $3, token_expiry = $4, email = $5, last_used = CURRENT_TIMESTAMP',
-          [
-            userId, 
-            tokens.access_token, 
-            tokens.refresh_token, 
-            new Date(tokens.expiry_date),
-            userEmail
-          ]
+          'INSERT INTO users (id, email, access_token, refresh_token, expiry_date) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET email = $2, access_token = $3, refresh_token = $4, expiry_date = $5',
+          [userId, userEmail, tokens.access_token, tokens.refresh_token, new Date(tokens.expiry_date)]
         );
         console.log(`Stored tokens in database for user ${userId}`);
-      } catch (dbError) {
-        console.error('Database error storing tokens:', dbError);
       }
+    } catch (dbError) {
+      console.error('Error storing tokens in database:', dbError.message);
+      // Continue without database storage - we have file storage as backup
     }
     
-    // Redirect to success page with user ID
-    res.redirect(`/auth-success?userId=${userId}&email=${encodeURIComponent(userEmail || '')}`);
+    // Set a cookie for the user
+    res.cookie('userId', userId, {
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax'
+    });
+    
+    // For SSO, also set a session cookie
+    if (req.path.includes('/sso')) {
+      console.log(`Set cookie for SSO user ${userId}`);
+      req.session.userId = userId;
+    }
+    
+    // Redirect to the success page
+    res.redirect('/auth-success.html');
   } catch (error) {
-    console.error('Authentication callback error:', error);
-    res.redirect(`/auth-error?error=general&description=${encodeURIComponent(error.message)}`);
+    console.error('Auth callback error:', error.message);
+    res.status(500).send(`Authentication failed: ${error.message}`);
   }
 });
 

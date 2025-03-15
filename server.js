@@ -221,6 +221,365 @@ const USERS_FILE = path.join(__dirname, 'users.json');
 // Import the database module
 const { initDatabase, ensureUsersTable } = require('./db');
 
+// Import the auth module
+const { oauth2Client, getAuthUrl, storeTokens, getTokensById, getAuthClient } = require('./auth');
+
+// Add these routes before you call startServer()
+
+// Authentication routes
+app.get('/auth', (req, res) => {
+  console.log('Auth route accessed');
+  const authUrl = getAuthUrl();
+  console.log(`Redirecting to Google auth: ${authUrl}`);
+  res.redirect(authUrl);
+});
+
+// Auth callback route
+app.get('/auth/callback', async (req, res) => {
+  const { code, state } = req.query;
+  console.log(`Auth callback received with query params: ${JSON.stringify({ state, code, scope: req.query.scope })}`);
+  
+  if (!code) {
+    console.error('Authorization code is missing');
+    return res.status(400).json({ error: 'Authorization code is missing' });
+  }
+
+  try {
+    console.log('Getting token with code');
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+    console.log('Successfully exchanged code for tokens');
+
+    // Try to get user email
+    let userId = state || '';
+    let userEmail;
+    
+    try {
+      // Try to get email from token
+      userEmail = getUserEmailFromTokens(tokens);
+      if (userEmail) {
+        console.log(`Retrieved user email from token: ${userEmail}`);
+        userId = userEmail;
+      } else {
+        // Try Google's userinfo endpoint
+        const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+        const userInfo = await oauth2.userinfo.get();
+        userEmail = userInfo.data.email;
+        console.log(`Retrieved user email: ${userEmail}`);
+        userId = userEmail;
+      }
+    } catch (emailError) {
+      console.error('Error retrieving user email:', emailError);
+      // If we can't get the email, use the state as userId or generate a random one
+      userId = state || crypto.randomBytes(16).toString('hex');
+      console.log(`Using state as userId: ${userId}`);
+    }
+
+    // Store the tokens
+    try {
+      await storeTokens(userId, tokens);
+      console.log(`Successfully stored tokens for user ${userId}`);
+    } catch (storeError) {
+      console.error('Error storing tokens:', storeError);
+    }
+
+    // Try to store user in the database 
+    try {
+      const { storeUser } = require('./db');
+      if (userEmail) {
+        await storeUser(userId, userEmail);
+        console.log(`Saved user ${userId} to database`);
+      }
+    } catch (userError) {
+      console.error('Error storing user in database:', userError);
+      console.log(`Saved user ${userId} to file storage`);
+    }
+
+    // Redirect to success page or return JSON
+    // Check if this is from ChatGPT plugin
+    const referer = req.get('Referer') || '';
+    if (referer.includes('chat.openai.com') || req.query.json === 'true') {
+      // Return JSON for API clients
+      return res.json({
+        success: true,
+        userId: userId,
+        message: 'Authentication successful'
+      });
+    } else {
+      // Redirect to success page for browsers
+      res.redirect(`/auth-success.html?userId=${encodeURIComponent(userId)}`);
+    }
+  } catch (error) {
+    console.error('Token exchange error:', error);
+    res.status(500).json({
+      error: 'Failed to authenticate',
+      details: error.message
+    });
+  }
+});
+
+// Auth success page for browsers
+app.get('/auth-success', (req, res) => {
+  const userId = req.query.userId || 'unknown';
+  res.send(`
+    <html>
+    <head>
+      <title>Authentication Successful</title>
+      <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+        .success { color: green; font-size: 24px; }
+        .info { margin-top: 20px; }
+      </style>
+    </head>
+    <body>
+      <h1 class="success">Authentication Successful!</h1>
+      <p class="info">You are authenticated as: ${userId}</p>
+      <p>You can now close this window and return to the application.</p>
+    </body>
+    </html>
+  `);
+});
+
+// Check auth status
+app.get('/auth/check', (req, res) => {
+  const userId = req.session.userId || req.cookies.userId;
+  
+  if (userId) {
+    res.json({ authenticated: true, userId: userId });
+  } else {
+    res.json({ authenticated: false });
+  }
+});
+
+// Also, make sure you have the auth-success.html file in your public directory
+// This function will create it if it doesn't exist
+const ensureAuthSuccessPage = () => {
+  const publicDir = path.join(__dirname, 'public');
+  if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+  }
+  
+  const authSuccessPath = path.join(publicDir, 'auth-success.html');
+  if (!fs.existsSync(authSuccessPath)) {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authentication Successful</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+    .success { color: green; font-size: 24px; }
+    .info { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1 class="success">Authentication Successful!</h1>
+  <p class="info">You can now close this window and return to the chat.</p>
+</body>
+</html>
+`;
+    fs.writeFileSync(authSuccessPath, htmlContent);
+    console.log('Created auth-success.html');
+  }
+};
+
+// Ensure the auth success page exists
+ensureAuthSuccessPage();
+
+// Create a default logo.png if it doesn't exist
+try {
+  const logoPath = path.join(__dirname, 'public', 'logo.png');
+  if (!fs.existsSync(logoPath)) {
+    // Create a simple 1x1 transparent PNG
+    const transparentPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+    fs.writeFileSync(logoPath, transparentPixel);
+    console.log('Created default logo.png');
+  }
+} catch (error) {
+  console.error('Error creating logo.png:', error);
+}
+
+// Log function (it was referenced but not defined)
+const logToConsole = (message, level = 'info') => {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] [${level.toUpperCase()}] ${message}`;
+  
+  if (level === 'error') {
+    console.error(logMessage);
+  } else if (level === 'warn') {
+    console.warn(logMessage);
+  } else {
+    console.log(logMessage);
+  }
+};
+
+// User management functions
+const readUsers = () => {
+  if (fs.existsSync(USERS_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+    } catch (error) {
+      console.error('Error reading users file:', error);
+      return {};
+    }
+  }
+  return {};
+};
+
+const saveUsers = (users) => {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error saving users file:', error);
+    return false;
+  }
+};
+
+// Add the API endpoints for logging data
+app.post('/api/log-data-v1', async (req, res) => {
+  try {
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = DEFAULT_SHEET_NAME, userMessage, assistantResponse, timestamp = new Date().toISOString() } = req.body;
+    
+    if (!userMessage || !assistantResponse) {
+      return res.status(400).json({ 
+        error: 'Missing required fields', 
+        message: 'userMessage and assistantResponse are required'
+      });
+    }
+    
+    // Try to use service account for direct access
+    try {
+      const auth = new google.auth.GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/spreadsheets']
+      });
+      
+      const authClient = await auth.getClient();
+      const sheets = google.sheets({ version: 'v4', auth: authClient });
+      
+      const response = await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${sheetName}!A:C`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        resource: {
+          values: [[userMessage, assistantResponse, timestamp]]
+        }
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Data logged successfully',
+        sheetName,
+        spreadsheetId
+      });
+    } catch (error) {
+      console.error('Direct logging failed, using fallback:', error);
+      
+      // Fallback: Queue for later processing
+      if (!global.pendingConversations) {
+        global.pendingConversations = [];
+      }
+      
+      const conversationId = crypto.randomBytes(16).toString('hex');
+      global.pendingConversations.push({
+        id: conversationId,
+        userMessage,
+        assistantResponse,
+        timestamp,
+        spreadsheetId,
+        sheetName,
+        attempts: 0
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Data queued for logging',
+        queuePosition: global.pendingConversations.length,
+        conversationId
+      });
+    }
+  } catch (error) {
+    console.error('Error in log-data-v1 endpoint:', error);
+    return res.status(500).json({
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
+// Direct log endpoint (same as log-data-v1 for now)
+app.post('/api/direct-log', async (req, res) => {
+  try {
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = DEFAULT_SHEET_NAME, userMessage, assistantResponse, timestamp = new Date().toISOString() } = req.body;
+    
+    if (!userMessage || !assistantResponse) {
+      return res.status(400).json({ 
+        error: 'Missing required fields', 
+        message: 'userMessage and assistantResponse are required'
+      });
+    }
+    
+    // Try to use service account for direct access
+    try {
+      const auth = new google.auth.GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/spreadsheets']
+      });
+      
+      const authClient = await auth.getClient();
+      const sheets = google.sheets({ version: 'v4', auth: authClient });
+      
+      const response = await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${sheetName}!A:C`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        resource: {
+          values: [[userMessage, assistantResponse, timestamp]]
+        }
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Data logged successfully',
+        sheetName,
+        spreadsheetId
+      });
+    } catch (error) {
+      console.error('Direct logging failed, using fallback:', error);
+      
+      // Fallback: Queue for later processing
+      if (!global.pendingConversations) {
+        global.pendingConversations = [];
+      }
+      
+      const conversationId = crypto.randomBytes(16).toString('hex');
+      global.pendingConversations.push({
+        id: conversationId,
+        userMessage,
+        assistantResponse,
+        timestamp,
+        spreadsheetId,
+        sheetName,
+        attempts: 0
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Data queued for logging',
+        queuePosition: global.pendingConversations.length,
+        conversationId
+      });
+    }
+  } catch (error) {
+    console.error('Error in direct-log endpoint:', error);
+    return res.status(500).json({
+      error: 'Server error',
+      message: error.message
+    });
+  }
+});
+
 // Fix the server binding
 const startServer = async () => {
   try {

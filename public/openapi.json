@@ -3,7 +3,7 @@
   "info": {
     "title": "GPT-to-Sheet API",
     "description": "API for logging chat conversations to Google Sheets with multiple fallback methods",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "servers": [
     {
@@ -14,13 +14,9 @@
     "/api/master-log": {
       "post": {
         "summary": "Log conversation with guaranteed success",
-        "description": "Logs conversation with automatic fallbacks to ensure data is saved even if primary methods fail",
+        "description": "Logs conversation with automatic fallbacks to ensure data is saved",
         "operationId": "masterLog",
-        "security": [
-          {
-            "chatgptOAuth": []
-          }
-        ],
+        "security": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -33,7 +29,7 @@
         },
         "responses": {
           "200": {
-            "description": "Successfully logged or stored the conversation",
+            "description": "Successfully logged the conversation",
             "content": {
               "application/json": {
                 "schema": {
@@ -74,6 +70,40 @@
           }
         }
       }
+    },
+    "/auth/chatgpt-key": {
+      "get": {
+        "summary": "Get a simplified API key",
+        "description": "Returns an API key for simple authentication",
+        "operationId": "getChatGptKey",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Successfully generated API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    },
+                    "token_type": {
+                      "type": "string"
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -82,16 +112,6 @@
         "type": "object",
         "required": ["userMessage", "assistantResponse"],
         "properties": {
-          "spreadsheetId": {
-            "type": "string",
-            "description": "Google Spreadsheet ID (optional)",
-            "default": "1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4"
-          },
-          "sheetName": {
-            "type": "string",
-            "description": "Name of the sheet (optional)",
-            "default": "Data"
-          },
           "userMessage": {
             "type": "string",
             "description": "Message from the user"
@@ -117,9 +137,6 @@
           },
           "logId": {
             "type": "string"
-          },
-          "results": {
-            "type": "object"
           }
         }
       },
@@ -134,12 +151,6 @@
           },
           "logId": {
             "type": "string"
-          },
-          "retrievalUrl": {
-            "type": "string"
-          },
-          "stats": {
-            "type": "object"
           }
         }
       }

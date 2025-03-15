@@ -236,10 +236,10 @@ app.get('/auth', (req, res) => {
 
 // Auth callback route
 app.get('/auth/callback', async (req, res) => {
-  const { code, state } = req.query;
-  console.log(`Auth callback received with query params: ${JSON.stringify({ state, code, scope: req.query.scope })}`);
-  
-  if (!code) {
+  const { code, state, redirect_uri } = req.query;
+  console.log(`Auth callback received with query params:`, req.query);
+    
+    if (!code) {
     console.error('Authorization code is missing');
     return res.status(400).json({ error: 'Authorization code is missing' });
   }
@@ -249,7 +249,7 @@ app.get('/auth/callback', async (req, res) => {
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
     console.log('Successfully exchanged code for tokens');
-
+    
     // Try to get user email
     let userId = state || '';
     let userEmail;
@@ -270,7 +270,6 @@ app.get('/auth/callback', async (req, res) => {
       }
     } catch (emailError) {
       console.error('Error retrieving user email:', emailError);
-      // If we can't get the email, use the state as userId or generate a random one
       userId = state || crypto.randomBytes(16).toString('hex');
       console.log(`Using state as userId: ${userId}`);
     }
@@ -279,7 +278,7 @@ app.get('/auth/callback', async (req, res) => {
     try {
       await storeTokens(userId, tokens);
       console.log(`Successfully stored tokens for user ${userId}`);
-    } catch (storeError) {
+      } catch (storeError) {
       console.error('Error storing tokens:', storeError);
     }
 
@@ -295,25 +294,35 @@ app.get('/auth/callback', async (req, res) => {
       console.log(`Saved user ${userId} to file storage`);
     }
 
-    // Redirect to success page or return JSON
-    // Check if this is from ChatGPT plugin
+    // Check if this is from ChatGPT plugin or action
     const referer = req.get('Referer') || '';
-    if (referer.includes('chat.openai.com') || req.query.json === 'true') {
-      // Return JSON for API clients
-      return res.json({
-        success: true,
+    if (referer.includes('chat.openai.com') || 
+        referer.includes('chatgpt.com') || 
+        req.query.json === 'true' || 
+        redirect_uri) {
+        
+      // For GPT actions, return a special format
+        return res.json({
+      success: true, 
         userId: userId,
-        message: 'Authentication successful'
+        message: 'Authentication successful',
+        // Add these fields to support GPT actions better
+        token: {
+          access_token: tokens.access_token,
+          token_type: "bearer",
+          scope: "sheets",
+          expires_in: Math.floor((tokens.expiry_date - Date.now()) / 1000)
+        }
       });
-    } else {
+      } else {
       // Redirect to success page for browsers
       res.redirect(`/auth-success.html?userId=${encodeURIComponent(userId)}`);
     }
   } catch (error) {
     console.error('Token exchange error:', error);
-    res.status(500).json({
+    res.status(500).json({ 
       error: 'Failed to authenticate',
-      details: error.message
+      details: error.message 
     });
   }
 });
@@ -323,19 +332,19 @@ app.get('/auth-success', (req, res) => {
   const userId = req.query.userId || 'unknown';
   res.send(`
     <html>
-    <head>
+      <head>
       <title>Authentication Successful</title>
-      <style>
+        <style>
         body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
         .success { color: green; font-size: 24px; }
         .info { margin-top: 20px; }
-      </style>
-    </head>
-    <body>
+        </style>
+      </head>
+      <body>
       <h1 class="success">Authentication Successful!</h1>
       <p class="info">You are authenticated as: ${userId}</p>
       <p>You can now close this window and return to the application.</p>
-    </body>
+      </body>
     </html>
   `);
 });
@@ -346,7 +355,7 @@ app.get('/auth/check', (req, res) => {
   
   if (userId) {
     res.json({ authenticated: true, userId: userId });
-  } else {
+                } else {
     res.json({ authenticated: false });
   }
 });
@@ -363,20 +372,20 @@ const ensureAuthSuccessPage = () => {
   if (!fs.existsSync(authSuccessPath)) {
     const htmlContent = `
 <!DOCTYPE html>
-<html>
-<head>
+    <html>
+      <head>
   <title>Authentication Successful</title>
-  <style>
+        <style>
     body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
     .success { color: green; font-size: 24px; }
     .info { margin-top: 20px; }
-  </style>
-</head>
-<body>
+        </style>
+      </head>
+      <body>
   <h1 class="success">Authentication Successful!</h1>
   <p class="info">You can now close this window and return to the chat.</p>
-</body>
-</html>
+      </body>
+    </html>
 `;
     fs.writeFileSync(authSuccessPath, htmlContent);
     console.log('Created auth-success.html');
@@ -408,7 +417,7 @@ const logToConsole = (message, level = 'info') => {
     console.error(logMessage);
   } else if (level === 'warn') {
     console.warn(logMessage);
-  } else {
+      } else {
     console.log(logMessage);
   }
 };
@@ -418,7 +427,7 @@ const readUsers = () => {
   if (fs.existsSync(USERS_FILE)) {
     try {
       return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-    } catch (error) {
+  } catch (error) {
       console.error('Error reading users file:', error);
       return {};
     }
@@ -467,13 +476,13 @@ app.post('/api/log-data-v1', async (req, res) => {
         }
       });
       
-      return res.status(200).json({
+      return res.status(200).json({ 
         success: true,
         message: 'Data logged successfully',
         sheetName,
         spreadsheetId
       });
-    } catch (error) {
+  } catch (error) {
       console.error('Direct logging failed, using fallback:', error);
       
       // Fallback: Queue for later processing
@@ -492,7 +501,7 @@ app.post('/api/log-data-v1', async (req, res) => {
         attempts: 0
       });
       
-      return res.status(200).json({
+      return res.status(200).json({ 
         success: true,
         message: 'Data queued for logging',
         queuePosition: global.pendingConversations.length,
@@ -539,13 +548,13 @@ app.post('/api/direct-log', async (req, res) => {
         }
       });
       
-      return res.status(200).json({
+      return res.status(200).json({ 
         success: true,
         message: 'Data logged successfully',
         sheetName,
         spreadsheetId
       });
-    } catch (error) {
+  } catch (error) {
       console.error('Direct logging failed, using fallback:', error);
       
       // Fallback: Queue for later processing
@@ -559,12 +568,12 @@ app.post('/api/direct-log', async (req, res) => {
         userMessage,
         assistantResponse,
         timestamp,
-        spreadsheetId,
+      spreadsheetId,
         sheetName,
-        attempts: 0
-      });
-      
-      return res.status(200).json({
+      attempts: 0
+    });
+    
+    return res.status(200).json({ 
         success: true,
         message: 'Data queued for logging',
         queuePosition: global.pendingConversations.length,
@@ -617,7 +626,7 @@ const startServer = async () => {
           server.close();
           server.listen(PORT, '0.0.0.0');
         }, 5000);
-      } else {
+          } else {
         // For other errors, exit so Render can restart the service
         process.exit(1);
       }

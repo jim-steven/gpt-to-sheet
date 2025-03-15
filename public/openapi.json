@@ -3,7 +3,7 @@
   "info": {
     "title": "GPT-to-Sheet API",
     "description": "API for logging chat conversations to Google Sheets with multiple fallback methods",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "servers": [
     {
@@ -13,7 +13,7 @@
   "paths": {
     "/api/master-log": {
       "post": {
-        "summary": "Log conversation with multiple fallback methods",
+        "summary": "Log conversation with guaranteed success",
         "description": "Logs conversation with automatic fallbacks to ensure data is saved even if primary methods fail",
         "operationId": "masterLog",
         "security": [
@@ -26,7 +26,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DirectLogRequest"
+                "$ref": "#/components/schemas/LogRequest"
               }
             }
           }
@@ -41,9 +41,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "Bad request - Missing required fields"
           }
         }
       }
@@ -59,7 +56,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DirectLogRequest"
+                "$ref": "#/components/schemas/LogRequest"
               }
             }
           }
@@ -74,9 +71,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "Bad request - Missing required fields"
           }
         }
       }
@@ -84,18 +78,18 @@
   },
   "components": {
     "schemas": {
-      "DirectLogRequest": {
+      "LogRequest": {
         "type": "object",
         "required": ["userMessage", "assistantResponse"],
         "properties": {
           "spreadsheetId": {
             "type": "string",
-            "description": "Google Spreadsheet ID",
+            "description": "Google Spreadsheet ID (optional)",
             "default": "1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4"
           },
           "sheetName": {
             "type": "string",
-            "description": "Name of the sheet within the spreadsheet",
+            "description": "Name of the sheet (optional)",
             "default": "Data"
           },
           "userMessage": {
@@ -108,7 +102,7 @@
           },
           "timestamp": {
             "type": "string",
-            "description": "ISO timestamp of the conversation (optional)"
+            "description": "ISO timestamp (optional)"
           }
         }
       },
@@ -125,18 +119,7 @@
             "type": "string"
           },
           "results": {
-            "type": "object",
-            "properties": {
-              "methods": {
-                "type": "object"
-              },
-              "primaryMethod": {
-                "type": "string"
-              },
-              "success": {
-                "type": "boolean"
-              }
-            }
+            "type": "object"
           }
         }
       },

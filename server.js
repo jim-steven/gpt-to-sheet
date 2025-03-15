@@ -239,7 +239,7 @@ app.get('/auth/callback', async (req, res) => {
   const { code, state, redirect_uri } = req.query;
   console.log(`Auth callback received with query params:`, req.query);
     
-    if (!code) {
+  if (!code) {
     console.error('Authorization code is missing');
     return res.status(400).json({ error: 'Authorization code is missing' });
   }
@@ -260,7 +260,7 @@ app.get('/auth/callback', async (req, res) => {
       if (userEmail) {
         console.log(`Retrieved user email from token: ${userEmail}`);
         userId = userEmail;
-      } else {
+    } else {
         // Try Google's userinfo endpoint
         const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
         const userInfo = await oauth2.userinfo.get();
@@ -279,50 +279,27 @@ app.get('/auth/callback', async (req, res) => {
       await storeTokens(userId, tokens);
       console.log(`Successfully stored tokens for user ${userId}`);
       } catch (storeError) {
-      console.error('Error storing tokens:', storeError);
-    }
-
-    // Try to store user in the database 
-    try {
-      const { storeUser } = require('./db');
-      if (userEmail) {
-        await storeUser(userId, userEmail);
-        console.log(`Saved user ${userId} to database`);
+        console.error('Error storing tokens:', storeError);
       }
-    } catch (userError) {
-      console.error('Error storing user in database:', userError);
-      console.log(`Saved user ${userId} to file storage`);
-    }
-
-    // Check if this is from ChatGPT plugin or action
-    const referer = req.get('Referer') || '';
-    if (referer.includes('chat.openai.com') || 
-        referer.includes('chatgpt.com') || 
-        req.query.json === 'true' || 
-        redirect_uri) {
-        
-      // For GPT actions, return a special format
-        return res.json({
+      
+    // For GPT actions, ALWAYS use JSON response format
+    // This will fix the redirect to undefined issue
+    return res.json({
       success: true, 
-        userId: userId,
-        message: 'Authentication successful',
-        // Add these fields to support GPT actions better
-        token: {
-          access_token: tokens.access_token,
-          token_type: "bearer",
-          scope: "sheets",
-          expires_in: Math.floor((tokens.expiry_date - Date.now()) / 1000)
-        }
-      });
-      } else {
-      // Redirect to success page for browsers
-      res.redirect(`/auth-success.html?userId=${encodeURIComponent(userId)}`);
-    }
+      userId: userId,
+      message: 'Authentication successful',
+      token: {
+        access_token: tokens.access_token,
+        token_type: "bearer",
+        scope: "sheets",
+        expires_in: Math.floor((tokens.expiry_date - Date.now()) / 1000)
+      }
+    });
   } catch (error) {
     console.error('Token exchange error:', error);
     res.status(500).json({ 
       error: 'Failed to authenticate',
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -374,7 +351,7 @@ const ensureAuthSuccessPage = () => {
 <!DOCTYPE html>
     <html>
       <head>
-  <title>Authentication Successful</title>
+        <title>Authentication Successful</title>
         <style>
     body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
     .success { color: green; font-size: 24px; }
@@ -403,8 +380,8 @@ try {
     const transparentPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
     fs.writeFileSync(logoPath, transparentPixel);
     console.log('Created default logo.png');
-  }
-} catch (error) {
+      }
+  } catch (error) {
   console.error('Error creating logo.png:', error);
 }
 
@@ -427,7 +404,7 @@ const readUsers = () => {
   if (fs.existsSync(USERS_FILE)) {
     try {
       return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-  } catch (error) {
+    } catch (error) {
       console.error('Error reading users file:', error);
       return {};
     }
@@ -449,8 +426,8 @@ const saveUsers = (users) => {
 app.post('/api/log-data-v1', async (req, res) => {
   try {
     const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = DEFAULT_SHEET_NAME, userMessage, assistantResponse, timestamp = new Date().toISOString() } = req.body;
-    
-    if (!userMessage || !assistantResponse) {
+  
+  if (!userMessage || !assistantResponse) {
       return res.status(400).json({ 
         error: 'Missing required fields', 
         message: 'userMessage and assistantResponse are required'
@@ -529,7 +506,11 @@ app.post('/api/direct-log', async (req, res) => {
       });
     }
     
-    // Try to use service account for direct access
+    // Try multiple auth methods in sequence
+    let success = false;
+    let errorDetails = [];
+    
+    // Method 1: Try using service account (will likely fail based on your logs)
     try {
       const auth = new google.auth.GoogleAuth({
         scopes: ['https://www.googleapis.com/auth/spreadsheets']
@@ -538,7 +519,7 @@ app.post('/api/direct-log', async (req, res) => {
       const authClient = await auth.getClient();
       const sheets = google.sheets({ version: 'v4', auth: authClient });
       
-      const response = await sheets.spreadsheets.values.append({
+      await sheets.spreadsheets.values.append({
         spreadsheetId,
         range: `${sheetName}!A:C`,
         valueInputOption: 'USER_ENTERED',
@@ -548,38 +529,72 @@ app.post('/api/direct-log', async (req, res) => {
         }
       });
       
+      success = true;
       return res.status(200).json({ 
         success: true,
-        message: 'Data logged successfully',
+        message: 'Data logged successfully with service account',
         sheetName,
         spreadsheetId
       });
-  } catch (error) {
-      console.error('Direct logging failed, using fallback:', error);
-      
-      // Fallback: Queue for later processing
-      if (!global.pendingConversations) {
-        global.pendingConversations = [];
+    } catch (error) {
+      console.error('Service account logging failed:', error);
+      errorDetails.push('Service account: ' + error.message);
+      // Continue to next method
+    }
+    
+    // Method 2: Try using OAuth client directly
+    if (!success) {
+      try {
+        // Use the global OAuth client with default credentials
+        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+        
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${sheetName}!A:C`,
+          valueInputOption: 'USER_ENTERED',
+          insertDataOption: 'INSERT_ROWS',
+          resource: {
+            values: [[userMessage, assistantResponse, timestamp]]
+          }
+        });
+        
+        success = true;
+        return res.status(200).json({ 
+          success: true,
+          message: 'Data logged successfully with OAuth client',
+          sheetName,
+          spreadsheetId
+        });
+      } catch (oauthError) {
+        console.error('OAuth client logging failed:', oauthError);
+        errorDetails.push('OAuth client: ' + oauthError.message);
+        // Continue to fallback method
       }
-      
-      const conversationId = crypto.randomBytes(16).toString('hex');
-      global.pendingConversations.push({
-        id: conversationId,
-        userMessage,
-        assistantResponse,
-        timestamp,
+    }
+    
+    // Fallback: Queue for later processing
+    if (!global.pendingConversations) {
+      global.pendingConversations = [];
+    }
+    
+    const conversationId = crypto.randomBytes(16).toString('hex');
+    global.pendingConversations.push({
+      id: conversationId,
+      userMessage,
+      assistantResponse,
+      timestamp,
       spreadsheetId,
-        sheetName,
+      sheetName,
       attempts: 0
     });
     
     return res.status(200).json({ 
-        success: true,
-        message: 'Data queued for logging',
-        queuePosition: global.pendingConversations.length,
-        conversationId
-      });
-    }
+      success: true,
+      message: 'Logging failed but data queued for later attempts',
+      queuePosition: global.pendingConversations.length,
+      conversationId,
+      errors: errorDetails
+    });
   } catch (error) {
     console.error('Error in direct-log endpoint:', error);
     return res.status(500).json({
@@ -811,4 +826,53 @@ const handleAuthCallback = async (code) => {
   
   return { userId, tokens };
 };
+
+// Add this route near the top of your route definitions
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>GPT-to-Sheet API</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; }
+          h1 { color: #333; }
+          .api-info { background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0; }
+          .endpoints { margin: 20px 0; }
+          .endpoint { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+          code { background: #f1f1f1; padding: 2px 5px; border-radius: 3px; }
+        </style>
+      </head>
+      <body>
+        <h1>GPT-to-Sheet API</h1>
+        <p>This API service allows logging ChatGPT conversations to Google Sheets.</p>
+        
+        <div class="api-info">
+          <h2>Quick Start</h2>
+          <p>To authenticate with Google Sheets, visit: <a href="/auth">/auth</a></p>
+          <p>Default Spreadsheet: <a href="https://docs.google.com/spreadsheets/d/1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4/edit" target="_blank">Open Sheet</a></p>
+        </div>
+        
+        <div class="endpoints">
+          <h2>Available Endpoints</h2>
+          <div class="endpoint">
+            <h3>POST /api/direct-log</h3>
+            <p>Log a conversation directly without authentication</p>
+          </div>
+          <div class="endpoint">
+            <h3>POST /api/log-data-v1</h3>
+            <p>Log a conversation with authentication (if available)</p>
+          </div>
+          <div class="endpoint">
+            <h3>GET /auth</h3>
+            <p>Start the Google OAuth flow</p>
+          </div>
+          <div class="endpoint">
+            <h3>GET /auth/check</h3>
+            <p>Check authentication status</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `);
+});
 

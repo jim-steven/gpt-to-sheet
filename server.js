@@ -224,6 +224,31 @@ const { initDatabase, ensureUsersTable } = require('./db');
 // Import the auth module
 const { oauth2Client, getAuthUrl, storeTokens, getTokensById, getAuthClient } = require('./auth');
 
+// Initialize Google Auth with explicit credentials
+const initializeGoogleAuth = () => {
+  try {
+    if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64) {
+      const keyFileContent = Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64, 'base64').toString('utf8');
+      const credentials = JSON.parse(keyFileContent);
+      
+      // Create auth client directly with credentials
+      const auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets']
+      });
+      
+      console.log('Successfully initialized Google Auth with service account');
+      return auth;
+    }
+  } catch (error) {
+    console.error('Error initializing Google Auth:', error);
+  }
+  return null;
+};
+
+// Store the auth client globally
+global.googleAuth = initializeGoogleAuth();
+
 // Ensure service account key file exists
 try {
   const keyFilePath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './service-account-key.json';
@@ -1364,27 +1389,28 @@ app.post('/api/master-log', async (req, res) => {
   // METHOD 2: Try service account if OAuth failed
   if (!results.success) {
     try {
-      const auth = new google.auth.GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/spreadsheets']
-      });
-      
-      const authClient = await auth.getClient();
-      const sheets = google.sheets({ version: 'v4', auth: authClient });
-      
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: DEFAULT_SPREADSHEET_ID,
-        range: `${DEFAULT_SHEET_NAME}!A:C`,
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        resource: {
-          values: [[userMessage, assistantResponse, timestamp]]
-        }
-      });
-      
-      results.methods.serviceAccount = true;
-      results.success = true;
-      results.primaryMethod = 'serviceAccount';
-      console.log(`Master log: Service account method succeeded for ${logId}`);
+      if (global.googleAuth) {
+        const authClient = await global.googleAuth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: DEFAULT_SPREADSHEET_ID,
+          range: `${DEFAULT_SHEET_NAME}!A:C`,
+          valueInputOption: 'USER_ENTERED',
+          insertDataOption: 'INSERT_ROWS',
+          resource: {
+            values: [[userMessage, assistantResponse, timestamp]]
+          }
+        });
+        
+        results.methods.serviceAccount = true;
+        results.success = true;
+        results.primaryMethod = 'serviceAccount';
+        console.log(`Master log: Service account method succeeded for ${logId}`);
+      } else {
+        results.methods.serviceAccount = false;
+        console.log(`Master log: Service account not initialized for ${logId}`);
+      }
     } catch (e) {
       results.methods.serviceAccount = false;
       console.error(`Master log: Service account method failed for ${logId}:`, e.message);

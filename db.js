@@ -22,6 +22,17 @@ const initDatabase = async () => {
         last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE,
+        name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);

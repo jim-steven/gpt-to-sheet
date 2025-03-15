@@ -12,6 +12,7 @@ const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const axios = require('axios');
+const jwtDecode = require('jwt-decode');
 
 // Environment configuration
 require("dotenv").config();
@@ -362,4 +363,42 @@ setInterval(async () => {
     logToConsole(`Error in background worker: ${error.message}`, 'error');
   }
 }, 60000); // Run every minute
+
+const getUserEmailFromTokens = (tokens) => {
+  try {
+    // If we have an id_token, we can decode it to get the email
+    if (tokens.id_token) {
+      const decoded = jwtDecode(tokens.id_token);
+      if (decoded.email) {
+        return decoded.email;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('Error decoding token:', error);
+    return null;
+  }
+};
+
+const handleAuthCallback = async (code) => {
+  const { tokens } = await oauth2Client.getToken(code);
+  oauth2Client.setCredentials(tokens);
+  
+  // Try to get email from token first
+  let userId = getUserEmailFromTokens(tokens);
+  
+  // If that fails, try API calls
+  if (!userId) {
+    try {
+      const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+      const userInfo = await oauth2.userinfo.get();
+      userId = userInfo.data.email;
+    } catch (error) {
+      // Final fallback - use a random ID
+      userId = `user_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    }
+  }
+  
+  return { userId, tokens };
+};
 

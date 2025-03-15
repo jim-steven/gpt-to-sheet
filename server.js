@@ -224,6 +224,25 @@ const { initDatabase, ensureUsersTable } = require('./db');
 // Import the auth module
 const { oauth2Client, getAuthUrl, storeTokens, getTokensById, getAuthClient } = require('./auth');
 
+// Ensure service account key file exists
+try {
+  const keyFilePath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './service-account-key.json';
+  
+  // Check if environment variable exists with base64 encoded key
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 && !fs.existsSync(keyFilePath)) {
+    console.log('Creating service account key file from base64 environment variable');
+    const keyFileContent = Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64, 'base64').toString('utf8');
+    fs.writeFileSync(keyFilePath, keyFileContent);
+    console.log(`Service account key file created at ${keyFilePath}`);
+  } else if (fs.existsSync(keyFilePath)) {
+    console.log('Service account key file already exists');
+  } else {
+    console.warn('No service account key file found and no base64 environment variable set');
+  }
+} catch (error) {
+  console.error('Error setting up service account:', error);
+}
+
 // Add these routes before you call startServer()
 
 // Authentication routes

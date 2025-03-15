@@ -4,9 +4,9 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node test-port.js",
     "start": "node server.js",
-    "test-deploy": "node test-deploy.js",
+    "test-deploy": "node test-port.js && node test-deploy.js",
     "predeploy": "npm run test-deploy"
   },
   "keywords": [],

@@ -221,8 +221,8 @@ const USERS_FILE = path.join(__dirname, 'users.json');
 // Import the database module
 const { initDatabase, ensureUsersTable } = require('./db');
 
-// Initialize the database before starting the server
-(async () => {
+// Fix the server binding
+const startServer = async () => {
   try {
     console.log('Initializing database...');
     await initDatabase();
@@ -231,21 +231,36 @@ const { initDatabase, ensureUsersTable } = require('./db');
     
     // Start the server with better error handling
     const PORT = process.env.PORT || 3000;
+    console.log(`Attempting to start server on port ${PORT}...`);
     
-    const server = app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+    // *** IMPORTANT: Bind to 0.0.0.0 instead of default localhost ***
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on port ${PORT} (http://0.0.0.0:${PORT})`);
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`Auth URL: ${process.env.GOOGLE_REDIRECT_URI.replace('/auth/callback', '/auth')}`);
+      console.log(`SSO Auth URL: ${process.env.GOOGLE_REDIRECT_URI.replace('/auth/callback', '/auth/sso')}`);
+      console.log(`OpenAPI Spec: ${process.env.GOOGLE_REDIRECT_URI.replace('/auth/callback', '/openapi.json')}`);
+    });
+    
+    // Add more detailed information on startup
+    server.on('listening', () => {
+      const addr = server.address();
+      console.log(`Server listening on: ${addr.address}:${addr.port}`);
     });
     
     // Handle server errors
     server.on('error', (error) => {
+      console.error('Server error:', error);
+      
       if (error.code === 'EADDRINUSE') {
         console.log(`Port ${PORT} is already in use. Trying again in 5 seconds...`);
         setTimeout(() => {
           server.close();
-          server.listen(PORT);
+          server.listen(PORT, '0.0.0.0');
         }, 5000);
       } else {
-        console.error('Server error:', error);
+        // For other errors, exit so Render can restart the service
+        process.exit(1);
       }
     });
     
@@ -258,18 +273,23 @@ const { initDatabase, ensureUsersTable } = require('./db');
       });
     });
     
-  } catch (error) {
-    console.error('Failed to initialize database:', error);
-    process.exit(1);
-    // This should never happen, but just in case
-    logToConsole(`Unexpected error in log-conversation endpoint: ${error.message}`, 'error');
-    return res.status(500).json({ 
-      error: 'Internal server error', 
-      message: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : error.message,
-      spreadsheetId: DEFAULT_SPREADSHEET_ID,
-      sheetName: DEFAULT_SHEET_NAME
+    // Add a health check endpoint
+    app.get('/health', (req, res) => {
+      res.status(200).send('OK');
     });
+    
+    return server;
+  } catch (error) {
+    console.error('Failed to initialize server:', error);
+    // Exit with error code so Render knows to restart
+    process.exit(1);
   }
+};
+
+// Call the function to start the server
+startServer().catch(error => {
+  console.error('Unhandled error during server startup:', error);
+  process.exit(1);
 });
 
 // Update the status endpoint to include the default sheet name

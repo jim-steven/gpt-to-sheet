@@ -1,0 +1,177 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "GPT-to-Sheet API",
+    "description": "API for logging chat conversations to Google Sheets with multiple fallback methods",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://gpt-to-sheet.onrender.com"
+    }
+  ],
+  "paths": {
+    "/api/master-log": {
+      "post": {
+        "summary": "Log conversation with multiple fallback methods",
+        "description": "Logs conversation with automatic fallbacks to ensure data is saved even if primary methods fail",
+        "operationId": "masterLog",
+        "security": [
+          {
+            "chatgptOAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectLogRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged or stored the conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MasterLogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Missing required fields"
+          }
+        }
+      }
+    },
+    "/api/memory-log": {
+      "post": {
+        "summary": "Log to server memory",
+        "description": "Stores conversation in server memory with guaranteed success",
+        "operationId": "memoryLog",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectLogRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully stored the conversation in memory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryLogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Missing required fields"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DirectLogRequest": {
+        "type": "object",
+        "required": ["userMessage", "assistantResponse"],
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "Google Spreadsheet ID",
+            "default": "1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4"
+          },
+          "sheetName": {
+            "type": "string",
+            "description": "Name of the sheet within the spreadsheet",
+            "default": "Data"
+          },
+          "userMessage": {
+            "type": "string",
+            "description": "Message from the user"
+          },
+          "assistantResponse": {
+            "type": "string",
+            "description": "Response from the assistant"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "ISO timestamp of the conversation (optional)"
+          }
+        }
+      },
+      "MasterLogResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "logId": {
+            "type": "string"
+          },
+          "results": {
+            "type": "object",
+            "properties": {
+              "methods": {
+                "type": "object"
+              },
+              "primaryMethod": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "MemoryLogResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "logId": {
+            "type": "string"
+          },
+          "retrievalUrl": {
+            "type": "string"
+          },
+          "stats": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "chatgptOAuth": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://gpt-to-sheet.onrender.com/auth/chatgpt-oauth",
+            "tokenUrl": "https://gpt-to-sheet.onrender.com/auth/token",
+            "scopes": {}
+          }
+        }
+      }
+    }
+  }
+} 

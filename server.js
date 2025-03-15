@@ -1477,3 +1477,89 @@ app.get('/auth/simple', (req, res) => {
   });
 });
 
+app.get('/openapi.json', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'openapi.json'));
+});
+
+// CRITICAL FIX: Special endpoint for ChatGPT OAuth that handles the redirect issue
+app.get('/auth/chatgpt-oauth', (req, res) => {
+  console.log('[AUTH DEBUG] ChatGPT OAuth endpoint accessed');
+  
+  // Add CORS headers specifically for ChatGPT
+  res.header('Access-Control-Allow-Origin', 'https://chat.openai.com');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Instead of redirecting, return a response with the auth URL
+  // This is critical - OpenAI's ChatGPT can't handle redirects properly
+  const authUrl = getAuthUrl();
+  console.log(`[AUTH DEBUG] Generated auth URL: ${authUrl}`);
+  
+  // This is the format ChatGPT expects for OAuth - it needs to match their spec exactly
+  return res.json({
+    auth_url: authUrl
+  });
+});
+
+// Update the token endpoint to be more robust and handle ChatGPT's specific format
+app.post('/auth/token', async (req, res) => {
+  console.log('[AUTH DEBUG] Token endpoint accessed with body:', req.body);
+  
+  try {
+    const { code, redirect_uri } = req.body;
+    
+    if (!code) {
+      console.error('[AUTH DEBUG] No code provided in token request');
+      return res.status(400).json({ error: 'Authorization code is required' });
+    }
+    
+    // Set the redirect_uri if provided
+    if (redirect_uri) {
+      oauth2Client.redirectUri = redirect_uri;
+      console.log(`[AUTH DEBUG] Using redirect_uri: ${redirect_uri}`);
+    }
+    
+    // Exchange the code for tokens
+    console.log('[AUTH DEBUG] Exchanging code for tokens');
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+    console.log('[AUTH DEBUG] Successfully exchanged code for tokens');
+    
+    // Format response according to OAuth2 standard that ChatGPT expects
+    return res.json({
+      access_token: tokens.access_token,
+      token_type: "Bearer",
+      expires_in: Math.floor((tokens.expiry_date - Date.now()) / 1000),
+      refresh_token: tokens.refresh_token || undefined,
+      scope: "sheets"
+    });
+  } catch (error) {
+    console.error('[AUTH DEBUG] Token exchange error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to exchange token',
+      details: error.message
+    });
+  }
+});
+
+// Add a debug endpoint for ChatGPT integration
+app.get('/auth/debug', (req, res) => {
+  console.log('[AUTH DEBUG] Debug endpoint accessed with query:', req.query);
+  console.log('[AUTH DEBUG] Debug endpoint accessed with headers:', req.headers);
+  
+  return res.json({
+    message: 'Debug info logged to server console',
+    query: req.query,
+    headers: {
+      referer: req.headers.referer,
+      origin: req.headers.origin,
+      host: req.headers.host,
+      userAgent: req.headers['user-agent']
+    },
+    serverInfo: {
+      env: process.env.NODE_ENV,
+      authUrl: process.env.GOOGLE_REDIRECT_URI,
+      time: new Date().toISOString()
+    }
+  });
+});
+

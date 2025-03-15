@@ -771,10 +771,26 @@ setInterval(async () => {
         
         // Update database if available
         if (pool) {
-          await pool.query(
-            'UPDATE pending_conversations SET synced = TRUE, synced_at = NOW() WHERE id = $1',
-            [conversation.id]
-          );
+          try {
+            // Check if the table exists first
+            const tableExists = await pool.query(`
+              SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' AND table_name = 'pending_conversations'
+              );
+            `);
+            
+            if (tableExists.rows[0].exists) {
+              await pool.query(
+                'UPDATE pending_conversations SET synced = TRUE, synced_at = NOW() WHERE id = $1',
+                [conversation.id]
+              );
+            } else {
+              console.log('Skipping database update - pending_conversations table does not exist');
+            }
+          } catch (dbError) {
+            console.error('Error updating pending_conversations:', dbError.message);
+          }
         }
       } catch (error) {
         logToConsole(`Failed to sync conversation ${conversation.id} on attempt ${conversation.attempts}: ${error.message}`, 'error');

@@ -12,7 +12,6 @@ const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const axios = require('axios');
-const jwtDecode = require('jwt-decode');
 
 // Environment configuration
 require("dotenv").config();
@@ -363,6 +362,29 @@ setInterval(async () => {
     logToConsole(`Error in background worker: ${error.message}`, 'error');
   }
 }, 60000); // Run every minute
+
+let jwtDecode;
+try {
+  jwtDecode = require('jwt-decode');
+} catch (error) {
+  console.warn('jwt-decode not available, using fallback implementation');
+  jwtDecode = (token) => {
+    // Simple fallback implementation
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        atob(base64).split('').map((c) => {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join('')
+      );
+      return JSON.parse(jsonPayload);
+    } catch (e) {
+      console.error('Error decoding token:', e);
+      return {};
+    }
+  };
+}
 
 const getUserEmailFromTokens = (tokens) => {
   try {

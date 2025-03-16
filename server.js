@@ -1646,3 +1646,127 @@ const verifyAuthentication = (req, res, next) => {
 // Apply the middleware to secured endpoints
 app.use('/api/secured-endpoint', verifyAuthentication);
 
+// Financial transaction logging endpoint
+app.post('/api/finance-log', async (req, res) => {
+  const {
+    transactionId = `FIN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    date = new Date().toISOString().split('T')[0],
+    time = new Date().toISOString().split('T')[1],
+    accountName,
+    transactionType,
+    category,
+    allowances,
+    deductions,
+    items,
+    establishment,
+    receiptNo,
+    amount,
+    paymentMethod,
+    cardUsed,
+    linkedBudgetCategory,
+    onlineTransactionId,
+    mappedOnlineVendor,
+    reimbursable,
+    reimbursementStatus,
+    interestType,
+    taxWithheld,
+    taxDeductible,
+    taxCategory,
+    bankIdentifier,
+    transactionMethod,
+    transferMethod,
+    referenceId,
+    notes,
+    processed = false
+  } = req.body;
+
+  // Validate required fields
+  if (!accountName || !transactionType || !category || !amount) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields',
+      requiredFields: ['accountName', 'transactionType', 'category', 'amount']
+    });
+  }
+
+  try {
+    // Convert transaction data to row format
+    const rowData = [
+      transactionId,
+      date,
+      time,
+      accountName,
+      transactionType,
+      category,
+      allowances ? allowances.join(', ') : '',
+      deductions ? deductions.join(', ') : '',
+      items ? items.join(', ') : '',
+      establishment || '',
+      receiptNo || '',
+      amount.toString(),
+      paymentMethod || '',
+      cardUsed || '',
+      linkedBudgetCategory || category,
+      onlineTransactionId || '',
+      mappedOnlineVendor || '',
+      reimbursable ? 'Yes' : 'No',
+      reimbursementStatus || '',
+      interestType || '',
+      taxWithheld ? taxWithheld.toString() : '',
+      taxDeductible ? 'Yes' : 'No',
+      taxCategory || '',
+      bankIdentifier || '',
+      transactionMethod || '',
+      transferMethod || '',
+      referenceId || '',
+      notes || '',
+      processed ? 'Yes' : 'No'
+    ];
+
+    // Try to log using master-log mechanism
+    const sheets = google.sheets({ version: 'v4', auth: global.googleAuth });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: DEFAULT_SPREADSHEET_ID,
+      range: 'Activity!A:AC', // Using all columns A through AC
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      resource: {
+        values: [rowData]
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Financial transaction logged successfully',
+      transactionId,
+      data: {
+        spreadsheetId: DEFAULT_SPREADSHEET_ID,
+        sheetName: 'Activity',
+        rowData
+      }
+    });
+  } catch (error) {
+    console.error('Failed to log financial transaction:', error);
+
+    // Fallback to queue if direct logging fails
+    if (!global.pendingTransactions) {
+      global.pendingTransactions = [];
+    }
+
+    global.pendingTransactions.push({
+      id: transactionId,
+      data: rowData,
+      attempts: 0,
+      timestamp: new Date().toISOString()
+    });
+
+    res.status(207).json({
+      success: true,
+      warning: 'Transaction queued for processing',
+      message: 'Direct logging failed, transaction queued for background processing',
+      transactionId,
+      error: error.message
+    });
+  }
+});
+

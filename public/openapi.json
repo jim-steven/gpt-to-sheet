@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "GPT-to-Sheet API",
-    "description": "API for logging chat conversations to Google Sheets with multiple fallback methods",
-    "version": "1.2.0"
+    "description": "API for logging chat conversations and financial transactions to Google Sheets",
+    "version": "1.3.0"
   },
   "servers": [
     {
@@ -104,6 +104,35 @@
           }
         }
       }
+    },
+    "/api/finance-log": {
+      "post": {
+        "summary": "Log financial transaction",
+        "description": "Logs financial transaction data to the Activity sheet",
+        "operationId": "logFinancialTransaction",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinancialTransaction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged the transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceLogResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -151,6 +180,53 @@
           },
           "logId": {
             "type": "string"
+          }
+        }
+      },
+      "FinancialTransaction": {
+        "type": "object",
+        "required": ["accountName", "transactionType", "category", "amount"],
+        "properties": {
+          "transactionId": {
+            "type": "string",
+            "description": "Unique identifier for the transaction"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "Transaction date"
+          },
+          // ... add all other properties ...
+        }
+      },
+      "FinanceLogResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "transactionId": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "spreadsheetId": {
+                "type": "string"
+              },
+              "sheetName": {
+                "type": "string"
+              },
+              "rowData": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }

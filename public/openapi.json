@@ -14,7 +14,7 @@
     "/api/master-log": {
       "post": {
         "summary": "Log conversation with guaranteed success",
-        "description": "Logs conversation with automatic fallbacks to ensure data is saved",
+        "description": "Logs conversation with automatic fallbacks to ensure data is saved in multiple ways (OAuth, Service Account, File, Memory, Queue)",
         "operationId": "masterLog",
         "security": [],
         "requestBody": {
@@ -34,6 +34,22 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MasterLogResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Data logged via serviceAccount method",
+                  "logId": "4982f46bac79b895",
+                  "results": {
+                    "methods": {
+                      "oauth": false,
+                      "serviceAccount": true,
+                      "fileStorage": true,
+                      "memoryStorage": true,
+                      "queue": "skipped"
+                    },
+                    "primaryMethod": "serviceAccount",
+                    "success": true
+                  }
                 }
               }
             }
@@ -64,6 +80,17 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MemoryLogResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Data logged to server memory",
+                  "logId": "4982f46bac79b895",
+                  "retrievalUrl": "https://gpt-to-sheet.onrender.com/api/memory-log/4982f46bac79b895",
+                  "stats": {
+                    "totalLogs": 42,
+                    "oldestLog": "2024-03-10T12:00:00Z",
+                    "newestLog": "2024-03-10T13:00:00Z"
+                  }
                 }
               }
             }
@@ -73,8 +100,8 @@
     },
     "/auth/chatgpt-key": {
       "get": {
-        "summary": "Get a simplified API key",
-        "description": "Returns an API key for simple authentication",
+        "summary": "Get direct API key",
+        "description": "Returns a direct API key for simple ChatGPT integration",
         "operationId": "getChatGptKey",
         "security": [],
         "responses": {
@@ -89,13 +116,16 @@
                       "type": "string"
                     },
                     "token_type": {
-                      "type": "string"
+                      "type": "string",
+                      "example": "Bearer"
                     },
                     "expires_in": {
-                      "type": "integer"
+                      "type": "integer",
+                      "example": 31536000
                     },
                     "scope": {
-                      "type": "string"
+                      "type": "string",
+                      "example": "sheets"
                     }
                   }
                 }
@@ -108,8 +138,9 @@
     "/api/finance-log": {
       "post": {
         "summary": "Log financial transaction",
-        "description": "Logs financial transaction data to the Activity sheet",
-        "operationId": "logFinancialTransaction",
+        "description": "Logs financial transaction data to the Activity sheet with automatic fallbacks (Service Account, Queue)",
+        "operationId": "financeLog",
+        "security": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -127,6 +158,35 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceLogResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Transaction logged via serviceAccount method",
+                  "transactionId": "FIN-1234567890-abcd",
+                  "results": {
+                    "methods": {
+                      "serviceAccount": true,
+                      "queue": "skipped"
+                    },
+                    "primaryMethod": "serviceAccount",
+                    "success": true
+                  }
+                }
+              }
+            }
+          },
+          "207": {
+            "description": "Transaction queued for processing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceLogQueuedResponse"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Transaction queued for processing",
+                  "transactionId": "FIN-1234567890-abcd",
+                  "warning": "Direct logging failed, transaction queued for retry"
                 }
               }
             }
@@ -151,7 +211,18 @@
           },
           "timestamp": {
             "type": "string",
-            "description": "ISO timestamp (optional)"
+            "description": "ISO timestamp (optional)",
+            "example": "2024-03-10T12:00:00Z"
+          },
+          "spreadsheetId": {
+            "type": "string",
+            "description": "Optional custom spreadsheet ID",
+            "example": "1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4"
+          },
+          "sheetName": {
+            "type": "string",
+            "description": "Optional custom sheet name",
+            "example": "Data"
           }
         }
       },
@@ -166,6 +237,38 @@
           },
           "logId": {
             "type": "string"
+          },
+          "results": {
+            "type": "object",
+            "properties": {
+              "methods": {
+                "type": "object",
+                "properties": {
+                  "oauth": {
+                    "type": "boolean"
+                  },
+                  "serviceAccount": {
+                    "type": "boolean"
+                  },
+                  "fileStorage": {
+                    "type": "boolean"
+                  },
+                  "memoryStorage": {
+                    "type": "boolean"
+                  },
+                  "queue": {
+                    "type": ["string", "boolean"]
+                  }
+                }
+              },
+              "primaryMethod": {
+                "type": "string",
+                "enum": ["oauth", "serviceAccount", "fileStorage", "memoryStorage", "queue"]
+              },
+              "success": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -180,6 +283,25 @@
           },
           "logId": {
             "type": "string"
+          },
+          "retrievalUrl": {
+            "type": "string"
+          },
+          "stats": {
+            "type": "object",
+            "properties": {
+              "totalLogs": {
+                "type": "integer"
+              },
+              "oldestLog": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "newestLog": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
           }
         }
       },
@@ -189,14 +311,67 @@
         "properties": {
           "transactionId": {
             "type": "string",
-            "description": "Unique identifier for the transaction"
+            "description": "Unique identifier for the transaction (auto-generated if not provided)"
           },
           "date": {
             "type": "string",
             "format": "date",
-            "description": "Transaction date"
+            "description": "Transaction date (YYYY-MM-DD)"
           },
-          // ... add all other properties ...
+          "time": {
+            "type": "string",
+            "format": "time",
+            "description": "Transaction time (HH:mm:ss)"
+          },
+          "accountName": {
+            "type": "string",
+            "description": "Name of the account"
+          },
+          "transactionType": {
+            "type": "string",
+            "enum": ["Expense (Spent)", "Income (Salary)", "Income (Other)", "Transfer (In)", "Transfer (Out)"]
+          },
+          "category": {
+            "type": "string",
+            "description": "Transaction category"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Transaction amount (negative for expenses)"
+          },
+          "establishment": {
+            "type": "string",
+            "description": "Where the transaction occurred"
+          },
+          "paymentMethod": {
+            "type": "string",
+            "description": "Method of payment"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of items purchased"
+          },
+          "allowances": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of allowances (for salary)"
+          },
+          "deductions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of deductions (for salary)"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Additional notes about the transaction"
+          }
         }
       },
       "FinanceLogResponse": {
@@ -211,34 +386,45 @@
           "transactionId": {
             "type": "string"
           },
-          "data": {
+          "results": {
             "type": "object",
             "properties": {
-              "spreadsheetId": {
-                "type": "string"
-              },
-              "sheetName": {
-                "type": "string"
-              },
-              "rowData": {
-                "type": "array",
-                "items": {
-                  "type": "string"
+              "methods": {
+                "type": "object",
+                "properties": {
+                  "serviceAccount": {
+                    "type": "boolean"
+                  },
+                  "queue": {
+                    "type": ["string", "boolean"]
+                  }
                 }
+              },
+              "primaryMethod": {
+                "type": "string",
+                "enum": ["serviceAccount", "queue"]
+              },
+              "success": {
+                "type": "boolean"
               }
             }
           }
         }
-      }
-    },
-    "securitySchemes": {
-      "chatgptOAuth": {
-        "type": "oauth2",
-        "flows": {
-          "authorizationCode": {
-            "authorizationUrl": "https://gpt-to-sheet.onrender.com/auth/chatgpt-oauth",
-            "tokenUrl": "https://gpt-to-sheet.onrender.com/auth/token",
-            "scopes": {}
+      },
+      "FinanceLogQueuedResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "transactionId": {
+            "type": "string"
           }
         }
       }

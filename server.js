@@ -1609,6 +1609,14 @@ app.get('/auth/chatgpt-key', (req, res) => {
 
 // Update our authentication check to also check API keys
 const verifyAuthentication = (req, res, next) => {
+  // Always allow these endpoints to proceed without authentication
+  if (req.path.includes('/api/master-log') || 
+      req.path.includes('/api/memory-log') ||
+      req.path.includes('/api/direct-log') ||
+      req.path.includes('/api/finance-log')) {
+    return next();
+  }
+  
       const authHeader = req.headers.authorization;
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7);
@@ -1628,15 +1636,6 @@ const verifyAuthentication = (req, res, next) => {
         return next();
       }
     }
-    
-    // Check other token types...
-  }
-  
-  // Always allow requests to proceed for our logging endpoints
-  if (req.path.includes('/api/master-log') || 
-      req.path.includes('/api/memory-log') ||
-      req.path.includes('/api/direct-log')) {
-    return next();
   }
   
   // Otherwise require authentication

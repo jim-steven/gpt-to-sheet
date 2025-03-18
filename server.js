@@ -1775,7 +1775,8 @@ app.post('/api/finance-log', async (req, res) => {
 });
 
 const getServiceAccountAuth = () => {
-  const keyFile = path.join(__dirname, 'path/to/your/service-account-file.json');
+  // Use environment variable for the path
+  const keyFile = process.env.SERVICE_ACCOUNT_KEY_PATH || '/etc/secrets/service-account-key.json';
   const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
 
   const auth = new google.auth.GoogleAuth({

@@ -1661,18 +1661,18 @@ async function verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName = 'Activi
   try {
     // Get current headers
     const response = await sheets.spreadsheets.values.get({
-        spreadsheetId,
+      spreadsheetId,
       range: `${sheetName}!1:1`
     });
 
     const currentHeaders = response.data.values?.[0] || [];
     
     // Check if headers match
-    const headersMatch = FINANCE_HEADERS.every(header => 
-      currentHeaders.includes(header)
+    const headersMatch = FINANCE_HEADERS.every((header, index) => 
+      currentHeaders[index] === header
     );
 
-    if (!headersMatch) {
+    if (!headersMatch || currentHeaders.length === 0) {
       // Update headers if they don't match or don't exist
       await sheets.spreadsheets.values.update({
         spreadsheetId,
@@ -1736,6 +1736,16 @@ app.post('/api/finance-log', async (req, res) => {
     // Generate a transaction ID if not provided
     const transactionId = req.body.transactionId || `FIN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     
+    // Generate current date and time if not provided
+    const currentDate = new Date();
+    const date = req.body.date || currentDate.toISOString().split('T')[0];
+    const time = req.body.time || currentDate.toTimeString().split(' ')[0];
+    
+    // Add these critical fields to the body object to ensure they're included
+    req.body.transactionId = transactionId;
+    req.body.date = date;
+    req.body.time = time;
+    
     // METHOD 1: Try service account first
     try {
       const auth = await getServiceAccountAuth();
@@ -1743,9 +1753,19 @@ app.post('/api/finance-log', async (req, res) => {
       
       await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);
       
-      // Prepare row data with default 'N/A' for empty fields
-      const rowData = FINANCE_HEADERS.map(header => {
-        let value = req.body[header.toLowerCase().replace(/ /g, '')] || 'N/A';
+      // Prepare row data with proper handling of the first three columns
+      const rowData = [];
+      
+      // Ensure first three columns are correctly populated
+      rowData.push(transactionId); // Transaction ID
+      rowData.push(date); // Date
+      rowData.push(time); // Time
+      
+      // Add remaining fields from headers, starting from the 4th column
+      for (let i = 3; i < FINANCE_HEADERS.length; i++) {
+        const header = FINANCE_HEADERS[i];
+        const key = header.toLowerCase().replace(/ /g, '');
+        let value = req.body[key] || 'N/A';
         
         // Handle arrays
         if (Array.isArray(value)) {
@@ -1757,8 +1777,8 @@ app.post('/api/finance-log', async (req, res) => {
           value = value.toString();
         }
         
-        return value;
-      });
+        rowData.push(value);
+      }
       
       await sheets.spreadsheets.values.append({
         spreadsheetId,

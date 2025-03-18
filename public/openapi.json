@@ -1,9 +1,11 @@
 {
+  "x-openai-isConsequential": false,
+  "x-openai-baseUrl": "https://gpt-to-sheet.onrender.com",
   "openapi": "3.1.0",
   "info": {
     "title": "GPT-to-Sheet API",
-    "description": "API for logging chat conversations and financial transactions to Google Sheets",
-    "version": "1.3.0"
+    "description": "API for logging chat conversations and financial transactions to Google Sheets. \n\n**IMPORTANT USAGE INSTRUCTIONS:** \n\n1. For general conversations and non-financial data, use the `/api/master-log` endpoint to send user messages and assistant responses to the 'Data' sheet.\n\n2. For financial transactions such as receipts, payments, payroll PDFs, bank statements, and other financial documents, use the `/api/finance-log` endpoint to log detailed transaction data to the 'Activity' sheet. When doing so, extract and include all relevant financial details from user inputs.\n\n3. When handling financial documents, always extract full details like account name, amount, transaction type, category, and date to create complete transaction records.",
+    "version": "1.5.0"
   },
   "servers": [
     {
@@ -13,8 +15,8 @@
   "paths": {
     "/api/master-log": {
       "post": {
-        "summary": "Log conversation with guaranteed success",
-        "description": "Logs conversation with automatic fallbacks to ensure data is saved in multiple ways (OAuth, Service Account, File, Memory, Queue)",
+        "summary": "Log general conversation with guaranteed success",
+        "description": "Use this endpoint for non-financial chat conversations and general information. Logs conversation to the 'Data' sheet with automatic fallbacks to ensure data is saved in multiple ways (OAuth, Service Account, File, Memory, Queue).",
         "operationId": "masterLog",
         "security": [],
         "requestBody": {
@@ -137,8 +139,8 @@
     },
     "/api/finance-log": {
       "post": {
-        "summary": "Log financial transaction",
-        "description": "Logs financial transaction data to the Activity sheet with automatic fallbacks (Service Account, Queue)",
+        "summary": "Log financial transaction details",
+        "description": "Use this endpoint ONLY for financial transactions like receipts, payments, bank statements, etc. Extract all possible details from financial documents and ensure the first three required fields (transactionId, date, time) are populated. When any financial information is shared, attempt to extract transaction details and log them with this endpoint to the 'Activity' sheet.",
         "operationId": "financeLog",
         "security": [],
         "requestBody": {
@@ -166,27 +168,12 @@
                   "results": {
                     "methods": {
                       "serviceAccount": true,
+                      "oauth": false,
                       "queue": "skipped"
                     },
                     "primaryMethod": "serviceAccount",
                     "success": true
                   }
-                }
-              }
-            }
-          },
-          "207": {
-            "description": "Transaction queued for processing",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FinanceLogQueuedResponse"
-                },
-                "example": {
-                  "success": true,
-                  "message": "Transaction queued for processing",
-                  "transactionId": "FIN-1234567890-abcd",
-                  "warning": "Direct logging failed, transaction queued for retry"
                 }
               }
             }
@@ -400,17 +387,20 @@
         "properties": {
           "transactionId": {
             "type": "string",
-            "description": "Unique identifier for each transaction (auto-generated if not provided)"
+            "description": "Unique identifier for each transaction (auto-generated if not provided)",
+            "default": "N/A"
           },
           "date": {
             "type": "string",
             "format": "date",
-            "description": "Date when the transaction occurred (YYYY-MM-DD)"
+            "description": "Date when the transaction occurred (YYYY-MM-DD). REQUIRED and should be extracted from the financial document. Will default to today if not specified.",
+            "default": "N/A"
           },
           "time": {
             "type": "string",
             "format": "time",
-            "description": "Time of the transaction (HH:mm:ss)"
+            "description": "Time of the transaction (HH:mm:ss). Will default to current time if not specified.",
+            "default": "N/A"
           },
           "accountName": {
             "type": "string",
@@ -674,6 +664,9 @@
                   "serviceAccount": {
                     "type": "boolean"
                   },
+                  "oauth": {
+                    "type": "boolean"
+                  },
                   "queue": {
                     "type": ["string", "boolean"]
                   }
@@ -681,7 +674,7 @@
               },
               "primaryMethod": {
                 "type": "string",
-                "enum": ["serviceAccount", "queue"]
+                "enum": ["serviceAccount", "oauth", "queue"]
               },
               "success": {
                 "type": "boolean"

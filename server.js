@@ -1774,3 +1774,35 @@ app.post('/api/finance-log', async (req, res) => {
   }
 });
 
+const getServiceAccountAuth = () => {
+  const keyFile = path.join(__dirname, 'path/to/your/service-account-file.json');
+  const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
+
+  const auth = new google.auth.GoogleAuth({
+    keyFile,
+    scopes,
+  });
+
+  return auth.getClient();
+};
+
+module.exports = { getServiceAccountAuth };
+
+app.get('/api/finance-history', async (req, res) => {
+  try {
+    const auth = await getServiceAccountAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // Example: Fetch data from a specific spreadsheet and range
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: 'your-spreadsheet-id',
+      range: 'Activity!A1:Z1000', // Adjust range as needed
+    });
+
+    res.json({ transactions: response.data.values });
+  } catch (error) {
+    console.error('Error fetching finance history:', error);
+    res.status(500).json({ error: 'Failed to retrieve finance history' });
+  }
+});
+

@@ -193,6 +193,95 @@
           }
         }
       }
+    },
+    "/api/finance-history": {
+      "get": {
+        "summary": "Get financial transaction history",
+        "description": "Retrieves financial transaction history using service account authentication",
+        "operationId": "getFinanceHistory",
+        "security": [],
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "query",
+            "description": "Google Sheets spreadsheet ID (optional, defaults to service default)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "transactions": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "description": "Raw spreadsheet values as a 2D array"
+                    }
+                  }
+                },
+                "example": {
+                  "transactions": [
+                    ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type"],
+                    ["FIN-1234", "2024-03-18", "14:30:00", "Maya Savings - 1442", "Expense (Spent)"]
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error retrieving transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "error": "Failed to retrieve finance history"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

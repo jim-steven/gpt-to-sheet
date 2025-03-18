@@ -1722,53 +1722,167 @@ app.post('/api/check-headers', async (req, res) => {
 // Updated finance-log endpoint
 app.post('/api/finance-log', async (req, res) => {
   try {
-    const sheets = google.sheets({ version: 'v4', auth: await getServiceAccountAuth() });
+    // Track success/failure of each method
+    const results = {
+      methods: {},
+      success: false,
+      primaryMethod: null
+    };
     
-    // Prepare row data with default 'N/A' for empty fields
-    const rowData = FINANCE_HEADERS.map(header => {
-      let value = req.body[header.toLowerCase().replace(/ /g, '')] || 'N/A';
+    // Use default spreadsheet if not provided
+    const spreadsheetId = req.body.spreadsheetId || process.env.DEFAULT_SPREADSHEET_ID || DEFAULT_SPREADSHEET_ID;
+    const sheetName = req.body.sheetName || 'Activity';
+    
+    // Generate a transaction ID if not provided
+    const transactionId = req.body.transactionId || `FIN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    
+    // METHOD 1: Try service account first
+    try {
+      const auth = await getServiceAccountAuth();
+      const sheets = google.sheets({ version: 'v4', auth });
       
-      // Handle arrays (like Allowances, Deductions, Items)
-      if (Array.isArray(value)) {
-        value = value.length > 0 ? value.join(', ') : 'N/A';
-      }
+      await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);
       
-      // Handle booleans
-      if (typeof value === 'boolean') {
-        value = value.toString();
-      }
+      // Prepare row data with default 'N/A' for empty fields
+      const rowData = FINANCE_HEADERS.map(header => {
+        let value = req.body[header.toLowerCase().replace(/ /g, '')] || 'N/A';
+        
+        // Handle arrays
+        if (Array.isArray(value)) {
+          value = value.length > 0 ? value.join(', ') : 'N/A';
+        }
+        
+        // Handle booleans
+        if (typeof value === 'boolean') {
+          value = value.toString();
+        }
+        
+        return value;
+      });
       
-      return value;
-    });
-
-    // Append the data
-    const response = await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.DEFAULT_SPREADSHEET_ID,
-      range: 'Activity!A:ZZ',
-          valueInputOption: 'USER_ENTERED',
-          resource: {
-        values: [rowData]
-      }
-    });
-
-    res.json({
-      success: true,
-      message: 'Transaction logged successfully',
-      transactionId: req.body.transactionId || `FIN-${Date.now()}`,
-      results: {
-        methods: {
-          serviceAccount: true,
-          queue: 'skipped'
-        },
-        primaryMethod: 'serviceAccount',
-        success: true
-      }
-    });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${sheetName}!A:ZZ`,
+        valueInputOption: 'USER_ENTERED',
+        resource: {
+          values: [rowData]
+        }
+      });
+      
+      results.methods.serviceAccount = true;
+      results.success = true;
+      results.primaryMethod = 'serviceAccount';
+      
+      return res.json({
+        success: true,
+        message: "Transaction logged via serviceAccount method",
+        transactionId,
+        results
+      });
+    } catch (error) {
+      console.error('Error logging transaction with service account:', error);
+      results.methods.serviceAccount = false;
+      // Continue to fallback methods
+    }
+    
+    // METHOD 2: Try OAuth client
+    if (!results.success) {
+      try {
+        if (oauth2Client && oauth2Client.credentials && oauth2Client.credentials.access_token) {
+          const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+          
+          await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);
+          
+          // Prepare row data with default 'N/A' for empty fields
+          const rowData = FINANCE_HEADERS.map(header => {
+            let value = req.body[header.toLowerCase().replace(/ /g, '')] || 'N/A';
+            
+            // Handle arrays
+            if (Array.isArray(value)) {
+              value = value.length > 0 ? value.join(', ') : 'N/A';
+            }
+            
+            // Handle booleans
+            if (typeof value === 'boolean') {
+              value = value.toString();
+            }
+            
+            return value;
+          });
+          
+          await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: `${sheetName}!A:ZZ`,
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+              values: [rowData]
+            }
+          });
+          
+          results.methods.oauth = true;
+          results.success = true;
+          results.primaryMethod = 'oauth';
+          
+          return res.json({
+            success: true,
+            message: "Transaction logged via oauth method",
+            transactionId,
+            results
+          });
+        } else {
+          results.methods.oauth = false;
+        }
       } catch (error) {
+        console.error('Error logging transaction with OAuth:', error);
+        results.methods.oauth = false;
+      }
+    }
+    
+    // METHOD 3: Queue for later processing
+    if (!results.success) {
+      try {
+        if (!global.pendingFinancialTransactions) {
+          global.pendingFinancialTransactions = [];
+        }
+        
+        global.pendingFinancialTransactions.push({
+          ...req.body,
+          transactionId,
+          spreadsheetId,
+          sheetName,
+          timestamp: new Date().toISOString(),
+          attempts: 0
+        });
+        
+        results.methods.queue = true;
+        results.success = true;
+        results.primaryMethod = 'queue';
+        
+        return res.status(207).json({
+          success: true,
+          message: "Transaction queued for processing",
+          transactionId,
+          warning: "Direct logging failed, transaction queued for retry",
+          results
+        });
+      } catch (error) {
+        console.error('Error queuing transaction:', error);
+        results.methods.queue = false;
+      }
+    }
+    
+    // If all methods failed
+    return res.status(500).json({
+      success: false,
+      message: "Failed to log transaction",
+      error: "All logging methods failed",
+      attempted: results
+    });
+  } catch (error) {
     console.error('Error logging transaction:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to log transaction',
+      message: "Failed to log transaction",
       error: error.message
     });
   }
@@ -1791,19 +1905,151 @@ module.exports = { getServiceAccountAuth };
 
 app.get('/api/finance-history', async (req, res) => {
   try {
-    const auth = await getServiceAccountAuth();
-    const sheets = google.sheets({ version: 'v4', auth });
-
-    // Example: Fetch data from a specific spreadsheet and range
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: 'your-spreadsheet-id',
-      range: 'Activity!A1:Z1000', // Adjust range as needed
+    // Use the same default spreadsheet ID as master-log
+    const spreadsheetId = req.query.spreadsheetId || process.env.DEFAULT_SPREADSHEET_ID || DEFAULT_SPREADSHEET_ID;
+    const sheetName = req.query.sheetName || 'Activity';
+    
+    // Create an array to track attempted methods
+    const results = {
+      methods: {},
+      success: false,
+      primaryMethod: null
+    };
+    
+    // METHOD 1: Try service account first
+    try {
+      const auth = await getServiceAccountAuth();
+      const sheets = google.sheets({ version: 'v4', auth });
+      
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${sheetName}!A1:Z1000`,
+      });
+      
+      results.methods.serviceAccount = true;
+      results.success = true;
+      results.primaryMethod = 'serviceAccount';
+      
+      return res.json({ 
+        transactions: response.data.values,
+        method: 'serviceAccount'
+      });
+    } catch (error) {
+      console.error('Error fetching finance history with service account:', error);
+      results.methods.serviceAccount = false;
+      // Continue to fallback method
+    }
+    
+    // METHOD 2: Try OAuth client
+    if (!results.success) {
+      try {
+        if (oauth2Client && oauth2Client.credentials && oauth2Client.credentials.access_token) {
+          const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+          
+          const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${sheetName}!A1:Z1000`,
+          });
+          
+          results.methods.oauth = true;
+          results.success = true;
+          results.primaryMethod = 'oauth';
+          
+          return res.json({ 
+            transactions: response.data.values,
+            method: 'oauth'
+          });
+        } else {
+          results.methods.oauth = false;
+        }
+      } catch (error) {
+        console.error('Error fetching finance history with OAuth:', error);
+        results.methods.oauth = false;
+      }
+    }
+    
+    // If all methods failed
+    return res.status(500).json({ 
+      error: 'Failed to retrieve finance history',
+      attempted: results
     });
-
-    res.json({ transactions: response.data.values });
   } catch (error) {
     console.error('Error fetching finance history:', error);
     res.status(500).json({ error: 'Failed to retrieve finance history' });
   }
 });
+
+// Add a background worker specifically for financial transactions
+setInterval(async () => {
+  try {
+    // Skip if no pending financial transactions
+    if (!global.pendingFinancialTransactions || global.pendingFinancialTransactions.length === 0) return;
+    
+    logToConsole(`Background worker: Processing ${global.pendingFinancialTransactions.length} pending financial transactions`);
+    
+    // Process each transaction
+    for (let i = 0; i < global.pendingFinancialTransactions.length; i++) {
+      const transaction = global.pendingFinancialTransactions[i];
+      
+      // Skip if too many attempts
+      if (transaction.attempts >= 5) {
+        logToConsole(`Skipping transaction ${transaction.transactionId} - too many attempts (${transaction.attempts})`);
+        continue;
+      }
+      
+      // Increment attempt counter
+      transaction.attempts++;
+      
+      try {
+        // Try to use service account
+        const auth = await getServiceAccountAuth();
+        const sheets = google.sheets({ version: 'v4', auth });
+        
+        // Use the sheet name from the transaction data or default to 'Activity'
+        const sheetName = transaction.sheetName || 'Activity';
+        const spreadsheetId = transaction.spreadsheetId || DEFAULT_SPREADSHEET_ID;
+        
+        // Verify and update headers if needed
+        await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);
+        
+        // Prepare row data
+        const rowData = FINANCE_HEADERS.map(header => {
+          let value = transaction[header.toLowerCase().replace(/ /g, '')] || 'N/A';
+          
+          // Handle arrays
+          if (Array.isArray(value)) {
+            value = value.length > 0 ? value.join(', ') : 'N/A';
+          }
+          
+          // Handle booleans
+          if (typeof value === 'boolean') {
+            value = value.toString();
+          }
+          
+          return value;
+        });
+        
+        // Append data to the sheet
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${sheetName}!A:ZZ`,
+          valueInputOption: 'USER_ENTERED',
+          resource: {
+            values: [rowData]
+          }
+        });
+        
+        logToConsole(`Successfully synced transaction ${transaction.transactionId} on attempt ${transaction.attempts}`);
+        
+        // Remove from pending list
+        global.pendingFinancialTransactions.splice(i, 1);
+        i--; // Adjust index since we removed an item
+      } catch (error) {
+        logToConsole(`Failed to sync transaction ${transaction.transactionId} on attempt ${transaction.attempts}: ${error.message}`, 'error');
+      }
+    }
+  } catch (error) {
+    logToConsole(`Error in financial transaction background worker: ${error.message}`, 'error');
+  }
+}, 65000); // Run every 65 seconds (slightly offset from the conversation worker)
 

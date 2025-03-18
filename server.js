@@ -1645,105 +1645,132 @@ const verifyAuthentication = (req, res, next) => {
 // Apply the middleware to secured endpoints
 app.use('/api/secured-endpoint', verifyAuthentication);
 
-// Financial transaction logging endpoint
-app.post('/api/finance-log', async (req, res) => {
-  const {
-    transactionId = `FIN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-    date = new Date().toISOString().split('T')[0],
-    time = new Date().toISOString().split('T')[1],
-    accountName,
-    transactionType,
-    category,
-    amount,
-    // ... other fields ...
-  } = req.body;
+// Define the expected headers for the finance log
+const FINANCE_HEADERS = [
+  'Transaction ID', 'Date', 'Time', 'Account Name', 'Transaction Type',
+  'Category', 'Allowances', 'Deductions', 'Items', 'Establishment',
+  'Receipt Number', 'Amount', 'Payment Method', 'Card Used',
+  'Linked Budget Category', 'Online Transaction ID', 'Mapped Online Vendor',
+  'Reimbursable', 'Reimbursement Status', 'Interest Type', 'Tax Withheld',
+  'Tax Deductible', 'Tax Category', 'Bank Identifier', 'Transaction Method',
+  'Transfer Method', 'Reference ID', 'Notes', 'Processed'
+];
 
-  // Track success/failure of each method
-  const results = {
-    methods: {},
-    success: false,
-    primaryMethod: null
-  };
-
-  // METHOD 1: Try service account first
+// Function to verify and update headers if needed
+async function verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName = 'Activity') {
   try {
-    if (global.googleAuth) {
-      const authClient = await global.googleAuth.getClient();
-      const sheets = google.sheets({ version: 'v4', auth: authClient });
-      
-      const rowData = [
-        transactionId,
-        date,
-        time,
-        accountName,
-        transactionType,
-        category,
-        amount.toString(),
-        // ... other fields ...
-      ];
-
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: DEFAULT_SPREADSHEET_ID,
-        range: 'Activity!A:AC',
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        resource: {
-          values: [rowData]
-        }
-      });
-
-      results.methods.serviceAccount = true;
-      results.success = true;
-      results.primaryMethod = 'serviceAccount';
-      console.log(`Finance log: Service account method succeeded for ${transactionId}`);
-    } else {
-      results.methods.serviceAccount = false;
-      console.log(`Finance log: Service account not initialized for ${transactionId}`);
-    }
-  } catch (e) {
-    results.methods.serviceAccount = false;
-    console.error(`Finance log: Service account method failed for ${transactionId}:`, e.message);
-  }
-
-  // METHOD 2: Store in memory for retry
-  try {
-    if (!global.pendingTransactions) {
-      global.pendingTransactions = [];
-    }
-
-    global.pendingTransactions.push({
-      id: transactionId,
-      data: {
-        transactionId,
-        date,
-        time,
-        accountName,
-        transactionType,
-        category,
-        amount,
-        // ... other fields ...
-      },
-      attempts: 0,
-      timestamp: new Date().toISOString()
+    // Get current headers
+    const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+      range: `${sheetName}!1:1`
     });
 
-    results.methods.queue = true;
-    if (!results.success) {
-      results.primaryMethod = 'queue';
-      results.success = true;
-    }
-    console.log(`Finance log: Added to queue for ${transactionId}`);
-  } catch (e) {
-    results.methods.queue = false;
-    console.error(`Finance log: Queue addition failed for ${transactionId}:`, e.message);
-  }
+    const currentHeaders = response.data.values?.[0] || [];
+    
+    // Check if headers match
+    const headersMatch = FINANCE_HEADERS.every(header => 
+      currentHeaders.includes(header)
+    );
 
-  // Always return success because we have fallbacks
-  return res.status(results.success ? 200 : 207).json({
-    success: true,
-    message: `Transaction ${results.success ? 'logged' : 'queued'} via ${results.primaryMethod} method`,
-    transactionId,
-    results
-  });
+    if (!headersMatch) {
+      // Update headers if they don't match or don't exist
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${sheetName}!1:1`,
+        valueInputOption: 'RAW',
+        resource: {
+          values: [FINANCE_HEADERS]
+        }
+      });
+      return { updated: true, message: 'Headers updated successfully' };
+    }
+
+    return { updated: false, message: 'Headers are correct' };
+  } catch (error) {
+    console.error('Error verifying headers:', error);
+    throw error;
+  }
+}
+
+// New endpoint to check and update headers
+app.post('/api/check-headers', async (req, res) => {
+  try {
+    const sheets = google.sheets({ version: 'v4', auth: await getServiceAccountAuth() });
+    const { spreadsheetId } = req.body;
+    
+    if (!spreadsheetId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Spreadsheet ID is required' 
+      });
+    }
+
+    const result = await verifyAndUpdateHeaders(sheets, spreadsheetId);
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    res.status(500).json({
+        success: false,
+      message: 'Failed to verify/update headers',
+      error: error.message
+    });
+  }
+});
+
+// Updated finance-log endpoint
+app.post('/api/finance-log', async (req, res) => {
+  try {
+    const sheets = google.sheets({ version: 'v4', auth: await getServiceAccountAuth() });
+    
+    // Prepare row data with default 'N/A' for empty fields
+    const rowData = FINANCE_HEADERS.map(header => {
+      let value = req.body[header.toLowerCase().replace(/ /g, '')] || 'N/A';
+      
+      // Handle arrays (like Allowances, Deductions, Items)
+      if (Array.isArray(value)) {
+        value = value.length > 0 ? value.join(', ') : 'N/A';
+      }
+      
+      // Handle booleans
+      if (typeof value === 'boolean') {
+        value = value.toString();
+      }
+      
+      return value;
+    });
+
+    // Append the data
+    const response = await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.DEFAULT_SPREADSHEET_ID,
+      range: 'Activity!A:ZZ',
+          valueInputOption: 'USER_ENTERED',
+          resource: {
+        values: [rowData]
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Transaction logged successfully',
+      transactionId: req.body.transactionId || `FIN-${Date.now()}`,
+      results: {
+        methods: {
+          serviceAccount: true,
+          queue: 'skipped'
+        },
+        primaryMethod: 'serviceAccount',
+        success: true
+      }
+    });
+      } catch (error) {
+    console.error('Error logging transaction:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to log transaction',
+      error: error.message
+    });
+  }
 });
 

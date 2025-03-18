@@ -311,66 +311,256 @@
         "properties": {
           "transactionId": {
             "type": "string",
-            "description": "Unique identifier for the transaction (auto-generated if not provided)"
+            "description": "Unique identifier for each transaction (auto-generated if not provided)"
           },
           "date": {
             "type": "string",
             "format": "date",
-            "description": "Transaction date (YYYY-MM-DD)"
+            "description": "Date when the transaction occurred (YYYY-MM-DD)"
           },
           "time": {
             "type": "string",
             "format": "time",
-            "description": "Transaction time (HH:mm:ss)"
+            "description": "Time of the transaction (HH:mm:ss)"
           },
           "accountName": {
             "type": "string",
-            "description": "Name of the account"
+            "description": "Specifies the bank or financial account involved (e.g., Maya Savings - 1442, Payroll Account)"
           },
           "transactionType": {
             "type": "string",
-            "enum": ["Expense (Spent)", "Income (Salary)", "Income (Other)", "Transfer (In)", "Transfer (Out)"]
+            "enum": [
+              "Income (Salary)",
+              "Expense (Spent)",
+              "Interest",
+              "Banking Fees",
+              "Transfer (In)",
+              "Transfer (Out)",
+              "Cashback Rewards"
+            ]
           },
           "category": {
             "type": "string",
-            "description": "Transaction category"
+            "enum": [
+              "Groceries",
+              "Dining Out",
+              "Rent",
+              "Utilities",
+              "Transportation",
+              "Subscriptions",
+              "Shopping",
+              "Health & Wellness",
+              "Education",
+              "Travel",
+              "Salary & Wages",
+              "Allowances",
+              "Deductions",
+              "Transfers",
+              "Interest Earnings",
+              "Banking Fees",
+              "Loans",
+              "Cashback Rewards",
+              "Savings (Personal Goal)",
+              "Miscellaneous"
+            ]
           },
-          "amount": {
-            "type": "number",
-            "description": "Transaction amount (negative for expenses)"
+          "allowances": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "Clothing Allowance",
+                "Laundry Allowance",
+                "Meal Allowance",
+                "Medicine Allowance",
+                "Rice Allowance"
+              ]
+            },
+            "description": "Breakdown of payroll benefits",
+            "default": []
           },
-          "establishment": {
-            "type": "string",
-            "description": "Where the transaction occurred"
-          },
-          "paymentMethod": {
-            "type": "string",
-            "description": "Method of payment"
+          "deductions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "Pag-IBIG",
+                "PhilHealth",
+                "SSS",
+                "SSS WISP",
+                "Withholding Tax"
+              ]
+            },
+            "description": "Breakdown of mandatory payroll deductions"
           },
           "items": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "List of items purchased"
+            "description": "Tracks specific purchases from grocery receipts, restaurant orders, or itemized expenses",
+            "default": []
           },
-          "allowances": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "List of allowances (for salary)"
+          "establishment": {
+            "type": "string",
+            "description": "Name of the store, restaurant, or online retailer where the transaction occurred",
+            "default": "N/A"
           },
-          "deductions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "List of deductions (for salary)"
+          "receiptNumber": {
+            "type": "string",
+            "description": "Receipt numbers, invoices, or order IDs for tracking reimbursements and financial audits",
+            "default": "N/A"
+          },
+          "amount": {
+            "type": "number",
+            "description": "The value of the transaction, negative for expenses and positive for income"
+          },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "Credit Card",
+              "Debit Card",
+              "Bank Transfer",
+              "Cash",
+              "GCash",
+              "Maya",
+              "PayPal"
+            ],
+            "description": "Specifies how the transaction was paid"
+          },
+          "cardUsed": {
+            "type": "string",
+            "description": "Tracks which specific card or bank account was used",
+            "default": "N/A"
+          },
+          "linkedBudgetCategory": {
+            "type": "string",
+            "description": "Same as Category, will update if new ones are needed",
+            "enum": [
+              "Groceries",
+              "Dining Out",
+              "Rent",
+              "Utilities",
+              "Transportation",
+              "Subscriptions",
+              "Shopping",
+              "Health & Wellness",
+              "Education",
+              "Travel",
+              "Salary & Wages",
+              "Allowances",
+              "Deductions",
+              "Transfers",
+              "Interest Earnings",
+              "Banking Fees",
+              "Loans",
+              "Cashback Rewards",
+              "Savings (Personal Goal)",
+              "Miscellaneous"
+            ]
+          },
+          "onlineTransactionId": {
+            "type": "string",
+            "description": "Unique identifier for online transactions",
+            "default": "N/A"
+          },
+          "mappedOnlineVendor": {
+            "type": "string",
+            "enum": [
+              "Amazon",
+              "Shopee",
+              "PayPal",
+              "Grab",
+              "Lazada",
+              "Uber Eats",
+              "Netflix",
+              "Spotify",
+              "Apple",
+              "Google",
+              "Government Services",
+              "Other"
+            ]
+          },
+          "reimbursable": {
+            "type": "boolean",
+            "description": "Indicates whether the transaction is eligible for reimbursement",
+            "default": false
+          },
+          "reimbursementStatus": {
+            "type": "string",
+            "enum": [
+              "Pending",
+              "Approved",
+              "Rejected",
+              "Paid"
+            ]
+          },
+          "interestType": {
+            "type": "string",
+            "enum": [
+              "Base Interest",
+              "Boost Campaign",
+              "Time Deposit Interest",
+              "Personal Goal Interest"
+            ]
+          },
+          "taxWithheld": {
+            "type": "number",
+            "description": "Amount of tax deducted from interest income or salary"
+          },
+          "taxDeductible": {
+            "type": "boolean",
+            "description": "Indicates whether the expense qualifies for tax deductions"
+          },
+          "taxCategory": {
+            "type": "string",
+            "enum": [
+              "Business Expense",
+              "Charity Donation",
+              "Medical",
+              "Education",
+              "Government Fees",
+              "Other"
+            ]
+          },
+          "bankIdentifier": {
+            "type": "string",
+            "description": "Identifies the bank processing the transaction (SWIFT/BIC Code)"
+          },
+          "transactionMethod": {
+            "type": "string",
+            "enum": [
+              "InstaPay",
+              "Bank Transfer",
+              "GCash",
+              "PayPal",
+              "Credit Card Payment",
+              "Debit Card Payment",
+              "Direct Deposit",
+              "Wallet Transfer"
+            ]
+          },
+          "transferMethod": {
+            "type": "string",
+            "enum": [
+              "InstaPay",
+              "PESONet",
+              "Maya Wallet"
+            ],
+            "description": "If the transaction is a transfer, specifies the type"
+          },
+          "referenceId": {
+            "type": "string",
+            "description": "The unique identifier provided by the bank or payment system"
           },
           "notes": {
             "type": "string",
-            "description": "Additional notes about the transaction"
+            "description": "Any additional details about the transaction"
+          },
+          "processed": {
+            "type": "boolean",
+            "description": "Indicates whether the transaction has been logged correctly",
+            "default": false
           }
         }
       },

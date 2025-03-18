@@ -1670,7 +1670,7 @@ async function verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName = 'Activi
   try {
     // Get current headers
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
+        spreadsheetId,
       range: `${sheetName}!1:1`
     });
 
@@ -1825,39 +1825,39 @@ app.post('/api/finance-log', async (req, res) => {
           const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
           
           await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);
-          
-          // Prepare row data with default 'N/A' for empty fields
-          const rowData = FINANCE_HEADERS.map(header => {
-            let value = req.body[header.toLowerCase().replace(/ /g, '')] || 'N/A';
-            
+    
+    // Prepare row data with default 'N/A' for empty fields
+    const rowData = FINANCE_HEADERS.map(header => {
+      let value = req.body[header.toLowerCase().replace(/ /g, '')] || 'N/A';
+      
             // Handle arrays
-            if (Array.isArray(value)) {
-              value = value.length > 0 ? value.join(', ') : 'N/A';
-            }
-            
-            // Handle booleans
-            if (typeof value === 'boolean') {
-              value = value.toString();
-            }
-            
-            return value;
-          });
-          
+      if (Array.isArray(value)) {
+        value = value.length > 0 ? value.join(', ') : 'N/A';
+      }
+      
+      // Handle booleans
+      if (typeof value === 'boolean') {
+        value = value.toString();
+      }
+      
+      return value;
+    });
+
           await sheets.spreadsheets.values.append({
             spreadsheetId,
             range: `${sheetName}!A:ZZ`,
-            valueInputOption: 'USER_ENTERED',
-            resource: {
-              values: [rowData]
-            }
-          });
-          
+          valueInputOption: 'USER_ENTERED',
+          resource: {
+        values: [rowData]
+      }
+    });
+
           results.methods.oauth = true;
           results.success = true;
           results.primaryMethod = 'oauth';
           
           return res.json({
-            success: true,
+      success: true,
             message: "Transaction logged via oauth method",
             transactionId,
             results
@@ -1911,7 +1911,7 @@ app.post('/api/finance-log', async (req, res) => {
       error: "All logging methods failed",
       attempted: results
     });
-  } catch (error) {
+      } catch (error) {
     console.error('Error logging transaction:', error);
     res.status(500).json({
       success: false,
@@ -2089,4 +2089,308 @@ setInterval(async () => {
     logToConsole(`Error in financial transaction background worker: ${error.message}`, 'error');
   }
 }, 65000); // Run every 65 seconds (slightly offset from the conversation worker)
+
+// Add this new endpoint to server.js
+app.post('/api/finance-log-bulk', async (req, res) => {
+  try {
+    const { items, ...commonFields } = req.body;
+    
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Items array is required and must not be empty"
+      });
+    }
+    
+    // Use default spreadsheet if not provided or if it's "N/A"
+    const spreadsheetId = (commonFields.spreadsheetId === 'N/A' || !commonFields.spreadsheetId) 
+      ? (process.env.DEFAULT_SPREADSHEET_ID || DEFAULT_SPREADSHEET_ID)
+      : commonFields.spreadsheetId;
+    
+    const sheetName = commonFields.sheetName || 'Activity';
+    
+    // Generate common transaction prefix for grouping related items
+    const receiptId = `REC-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+    
+    // Generate current date and time if not provided
+    const currentDate = new Date();
+    const date = commonFields.date || currentDate.toISOString().split('T')[0];
+    const time = commonFields.time || currentDate.toTimeString().split(' ')[0];
+    
+    // Track results for each item
+    const results = [];
+    let successCount = 0;
+    let serviceAccountSuccessful = false;
+    let oauthSuccessful = false;
+    
+    // METHOD 1: Try service account first for all items
+    try {
+      const auth = await getServiceAccountAuth();
+      const sheets = google.sheets({ version: 'v4', auth });
+      
+      // Verify and update headers once for the whole batch
+      await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);
+      
+      // Process each item
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const itemName = typeof item === 'object' ? item.name : item;
+        const itemAmount = typeof item === 'object' ? item.amount : null;
+        
+        // Generate a unique transaction ID for this item
+        const transactionId = `${receiptId}-ITEM-${i+1}`;
+        
+        // Prepare row data with proper handling of the first three columns
+        const rowData = [];
+        
+        // Ensure first three columns are correctly populated
+        rowData.push(transactionId); // Transaction ID
+        rowData.push(date); // Date
+        rowData.push(time); // Time
+        
+        // Add remaining fields from headers, starting from the 4th column
+        for (let j = 3; j < FINANCE_HEADERS.length; j++) {
+          const header = FINANCE_HEADERS[j];
+          const key = header.toLowerCase().replace(/ /g, '');
+          
+          let value;
+          
+          // Special handling for item name and amount
+          if (header === 'Items') {
+            value = itemName || 'N/A';
+          } else if (header === 'Amount' && itemAmount !== null) {
+            value = itemAmount;
+          } else {
+            value = commonFields[key] || 'N/A';
+          }
+          
+          // Handle arrays
+          if (Array.isArray(value)) {
+            value = value.length > 0 ? value.join(', ') : 'N/A';
+          }
+          
+          // Handle booleans
+          if (typeof value === 'boolean') {
+            value = value.toString();
+          }
+          
+          rowData.push(value);
+        }
+        
+        try {
+          await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: `${sheetName}!A:ZZ`,
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+              values: [rowData]
+            }
+          });
+          
+          results.push({
+            item: itemName,
+            transactionId,
+            success: true,
+            method: 'serviceAccount'
+          });
+          
+          successCount++;
+        } catch (itemError) {
+          console.error(`Error logging item "${itemName}" with service account:`, itemError);
+          results.push({
+            item: itemName,
+            transactionId,
+            success: false,
+            error: itemError.message,
+            method: 'serviceAccount'
+          });
+        }
+      }
+      
+      serviceAccountSuccessful = successCount === items.length;
+      
+      if (serviceAccountSuccessful) {
+        return res.json({
+          success: true,
+          message: `Successfully logged all ${items.length} items from receipt using service account`,
+          receiptId,
+          results,
+          method: 'serviceAccount'
+        });
+      }
+      
+    } catch (error) {
+      console.error('Error logging bulk transaction with service account:', error);
+      // Continue to fallback method for failed items
+    }
+    
+    // METHOD 2: Try OAuth client for any failed items
+    if (!serviceAccountSuccessful && oauth2Client && oauth2Client.credentials && oauth2Client.credentials.access_token) {
+      try {
+        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+        
+        // Verify and update headers
+        await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);
+        
+        // Process each failed item
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].success) continue; // Skip already successful items
+          
+          const item = items[i];
+          const itemName = typeof item === 'object' ? item.name : item;
+          const itemAmount = typeof item === 'object' ? item.amount : null;
+          
+          // Generate/reuse transaction ID
+          const transactionId = results[i].transactionId || `${receiptId}-ITEM-${i+1}`;
+          
+          // Prepare row data
+          const rowData = [];
+          
+          // Ensure first three columns are correctly populated
+          rowData.push(transactionId); // Transaction ID
+          rowData.push(date); // Date
+          rowData.push(time); // Time
+          
+          // Add remaining fields
+          for (let j = 3; j < FINANCE_HEADERS.length; j++) {
+            const header = FINANCE_HEADERS[j];
+            const key = header.toLowerCase().replace(/ /g, '');
+            
+            let value;
+            
+            // Special handling for item name and amount
+            if (header === 'Items') {
+              value = itemName || 'N/A';
+            } else if (header === 'Amount' && itemAmount !== null) {
+              value = itemAmount;
+            } else {
+              value = commonFields[key] || 'N/A';
+            }
+            
+            // Handle arrays/booleans
+            if (Array.isArray(value)) {
+              value = value.length > 0 ? value.join(', ') : 'N/A';
+            }
+            if (typeof value === 'boolean') {
+              value = value.toString();
+            }
+            
+            rowData.push(value);
+          }
+          
+          try {
+            await sheets.spreadsheets.values.append({
+              spreadsheetId,
+              range: `${sheetName}!A:ZZ`,
+              valueInputOption: 'USER_ENTERED',
+              resource: {
+                values: [rowData]
+              }
+            });
+            
+            results[i] = {
+              item: itemName,
+              transactionId,
+              success: true,
+              method: 'oauth'
+            };
+            
+            successCount++;
+          } catch (itemError) {
+            console.error(`Error logging item "${itemName}" with OAuth:`, itemError);
+            // Keep the failed status but update the method attempted
+            results[i].oauthAttempted = true;
+          }
+        }
+        
+        oauthSuccessful = successCount === items.length;
+        
+        if (oauthSuccessful) {
+          return res.json({
+            success: true,
+            message: `Successfully logged all ${items.length} items from receipt`,
+            receiptId,
+            results,
+            method: 'mixed' // Some may have used service account, others OAuth
+          });
+        }
+        
+      } catch (error) {
+        console.error('Error in OAuth fallback for bulk transaction:', error);
+        // Continue to queue fallback for remaining items
+      }
+    }
+    
+    // METHOD 3: Queue any remaining failed items for later processing
+    if (!global.pendingFinancialTransactions) {
+      global.pendingFinancialTransactions = [];
+    }
+    
+    // Queue each failed item
+    let queuedCount = 0;
+    for (let i = 0; i < results.length; i++) {
+      if (!results[i].success) {
+        const item = items[i];
+        const itemName = typeof item === 'object' ? item.name : item;
+        const itemAmount = typeof item === 'object' ? item.amount : null;
+        
+        // Create a transaction for each item
+        const transaction = {
+          ...commonFields,
+          transactionId: results[i].transactionId,
+          items: itemName,
+          amount: itemAmount,
+          spreadsheetId,
+          sheetName,
+          timestamp: new Date().toISOString(),
+          attempts: 0,
+          fromBulkReceipt: true,
+          receiptId
+        };
+        
+        global.pendingFinancialTransactions.push(transaction);
+        queuedCount++;
+        
+        results[i].queued = true;
+      }
+    }
+    
+    // Determine final status based on success/queue count
+    if (successCount + queuedCount === items.length) {
+      if (successCount > 0) {
+        return res.status(207).json({ // 207 Multi-Status
+          success: true,
+          message: `Logged ${successCount} items directly, queued ${queuedCount} items for retry`,
+          receiptId,
+          results,
+          warning: queuedCount > 0 ? "Some items could not be logged directly and have been queued" : null
+        });
+      } else {
+        return res.status(202).json({ // 202 Accepted
+          success: true,
+          message: `All ${queuedCount} items have been queued for processing`,
+          receiptId,
+          results,
+          warning: "Direct logging failed for all items, transactions queued for retry"
+        });
+      }
+    } else {
+      // Some items failed and couldn't even be queued
+      return res.status(500).json({
+        success: false,
+        message: "Failed to log or queue some items",
+        receiptId,
+        results,
+        error: "Not all items could be processed"
+      });
+    }
+  } catch (error) {
+    console.error('Error in finance-log-bulk endpoint:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to process bulk transaction",
+      error: error.message
+    });
+  }
+});
 

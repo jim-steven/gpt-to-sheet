@@ -1492,7 +1492,16 @@ app.post('/api/master-log', async (req, res) => {
       });
       
       results.methods.queue = true;
-      console.log(`Master log: Added to processing queue for ${logId}`);
+      results.success = true;
+      results.primaryMethod = 'queue';
+      
+      return res.status(207).json({
+        success: true,
+        message: "Transaction queued for processing",
+        transactionId,
+        warning: "Direct logging failed, transaction queued for retry",
+        results
+      });
     } else {
       results.methods.queue = 'skipped';
     }
@@ -1729,8 +1738,12 @@ app.post('/api/finance-log', async (req, res) => {
       primaryMethod: null
     };
     
-    // Use default spreadsheet if not provided
-    const spreadsheetId = req.body.spreadsheetId || process.env.DEFAULT_SPREADSHEET_ID || DEFAULT_SPREADSHEET_ID;
+    // Use default spreadsheet if not provided or if it's "N/A"
+    // This is the key fix - we're explicitly checking for "N/A" now
+    const spreadsheetId = (req.body.spreadsheetId === 'N/A' || !req.body.spreadsheetId) 
+      ? (process.env.DEFAULT_SPREADSHEET_ID || DEFAULT_SPREADSHEET_ID)
+      : req.body.spreadsheetId;
+    
     const sheetName = req.body.sheetName || 'Activity';
     
     // Generate a transaction ID if not provided
@@ -2027,7 +2040,11 @@ setInterval(async () => {
         
         // Use the sheet name from the transaction data or default to 'Activity'
         const sheetName = transaction.sheetName || 'Activity';
-        const spreadsheetId = transaction.spreadsheetId || DEFAULT_SPREADSHEET_ID;
+        
+        // Fix here: Check for "N/A" and use default if needed
+        const spreadsheetId = (transaction.spreadsheetId === 'N/A' || !transaction.spreadsheetId)
+          ? DEFAULT_SPREADSHEET_ID
+          : transaction.spreadsheetId;
         
         // Verify and update headers if needed
         await verifyAndUpdateHeaders(sheets, spreadsheetId, sheetName);

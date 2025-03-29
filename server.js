@@ -31,6 +31,18 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
 // Initialize sheets API
 const sheets = google.sheets({ version: 'v4', auth });
 
+// Get service account email
+app.get("/api/service-account", async (req, res) => {
+  try {
+    const client = await auth.getClient();
+    const serviceAccount = client.email;
+    res.json({ serviceAccount });
+  } catch (error) {
+    console.error("Error getting service account:", error);
+    res.status(500).json({ error: "Failed to get service account email" });
+  }
+});
+
 // Log data to Google Sheets
 app.post("/api/log-data", async (req, res) => {
   const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp } = req.body;
@@ -83,7 +95,8 @@ app.get('/', (req, res) => {
     message: "GPT to Sheet API",
     endpoints: {
       logData: "POST /api/log-data",
-      getSheetData: "POST /api/get-sheet-data"
+      getSheetData: "POST /api/get-sheet-data",
+      serviceAccount: "GET /api/service-account"
     }
   });
 });

@@ -12,10 +12,21 @@ app.use(express.json());
 app.use(cors());
 
 // Create service account client
-const auth = new google.auth.GoogleAuth({
-  keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
+let auth;
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+  // For production: use JSON string from environment variable
+  const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+  auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
+} else {
+  // For local development: use file path
+  auth = new google.auth.GoogleAuth({
+    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
+}
 
 // Initialize sheets API
 const sheets = google.sheets({ version: 'v4', auth });

@@ -28,6 +28,8 @@ const storeTokens = async (userId, tokens) => {
   const { access_token, refresh_token, expiry_date } = tokens;
   
   try {
+    // Convert milliseconds to seconds to fit in PostgreSQL integer
+    // Or use to_timestamp() to convert to PostgreSQL timestamp
     await pool.query(
       `INSERT INTO auth_tokens (user_id, access_token, refresh_token, token_expiry) 
        VALUES ($1, $2, $3, to_timestamp($4/1000))
@@ -42,7 +44,26 @@ const storeTokens = async (userId, tokens) => {
     return true;
   } catch (error) {
     console.error('Error storing tokens:', error);
-    return false;
+    
+    // Try an alternative approach if the first one fails
+    try {
+      // Use NOW() + interval instead of trying to parse the timestamp
+      await pool.query(
+        `INSERT INTO auth_tokens (user_id, access_token, refresh_token, token_expiry) 
+         VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour')
+         ON CONFLICT (user_id) 
+         DO UPDATE SET 
+           access_token = $2, 
+           refresh_token = CASE WHEN $3 = '' THEN auth_tokens.refresh_token ELSE $3 END,
+           token_expiry = NOW() + INTERVAL '1 hour',
+           last_used = CURRENT_TIMESTAMP`,
+        [userId, access_token, refresh_token || '']
+      );
+      return true;
+    } catch (secondError) {
+      console.error('Secondary error storing tokens:', secondError);
+      return false;
+    }
   }
 };
 

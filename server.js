@@ -44,7 +44,7 @@ app.get("/api/service-account", async (req, res) => {
 });
 
 // Log data to Google Sheets
-app.post("/api/log-data", async (req, res) => {
+app.post("/api/log-data-to-sheet", async (req, res) => {
   const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp } = req.body;
 
   if (!spreadsheetId || !sheetName || !userMessage || !assistantResponse) {
@@ -94,7 +94,7 @@ app.get('/', (req, res) => {
   res.json({
     message: "GPT to Sheet API",
     endpoints: {
-      logData: "POST /api/log-data",
+      logData: "POST /api/log-data-to-sheet",
       getSheetData: "POST /api/get-sheet-data",
       serviceAccount: "GET /api/service-account"
     }

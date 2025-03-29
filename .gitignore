@@ -1,3 +1,21 @@
-node_modules
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment variables
 .env
+
+# Service account credentials
+*.json
+!package.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
 .DS_Store
+Thumbs.db

@@ -10,6 +10,10 @@ require("dotenv").config();
 // Express app setup
 const app = express();
 
+// Default configuration
+const DEFAULT_SPREADSHEET_ID = '1zlC8E46a3lD6z6jNglA5IrrNIQv_5pLhRF0T7fOPhXs';
+const DEFAULT_SHEET_NAME = 'Transactions';
+
 // Configure CORS with specific options
 const corsOptions = {
   origin: '*',
@@ -99,12 +103,12 @@ app.get('/api/service-account', async (req, res) => {
 // Log data to sheet
 app.post('/api/log-data-to-sheet', async (req, res) => {
   try {
-    const { spreadsheetId, sheetName, data } = req.body;
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = DEFAULT_SHEET_NAME, data } = req.body;
 
-    if (!spreadsheetId || !sheetName || !data) {
+    if (!data) {
       return res.status(400).json({
         success: false,
-        message: "Missing required parameters",
+        message: "Missing required data parameter",
         results: {
           methods: {
             serviceAccount: false,
@@ -117,8 +121,10 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
       });
     }
 
+    console.log(`Attempting to log data to spreadsheet: ${spreadsheetId}, sheet: ${sheetName}`);
     const auth = getServiceAccountAuth();
     await auth.authorize();
+    console.log('Service account authorized successfully');
 
     // Convert data to array format
     const values = Array.isArray(data) ? data : [data];
@@ -138,8 +144,10 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
       });
     });
 
+    console.log('Prepared rows for insertion:', rows);
+    
     // Append data to sheet
-    await sheets.spreadsheets.values.append({
+    const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${sheetName}!A:AA`,
       valueInputOption: 'RAW',
@@ -147,6 +155,8 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
         values: rows
       }
     });
+
+    console.log('Data appended successfully:', response.data);
 
     res.json({
       success: true,
@@ -164,9 +174,16 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
     });
   } catch (error) {
     console.error("Error logging data:", error);
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    });
+    
     res.status(500).json({
       success: false,
       message: "Failed to log data",
+      error: error.message,
       results: {
         methods: {
           serviceAccount: false,
@@ -183,40 +200,34 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
 // Get sheet data
 app.post('/api/get-sheet-data', async (req, res) => {
   try {
-    const { spreadsheetId, sheetName } = req.body;
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = DEFAULT_SHEET_NAME } = req.body;
 
-    if (!spreadsheetId || !sheetName) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required parameters",
-        results: {
-          methods: {
-            serviceAccount: false,
-            oauth: false,
-            queue: false
-          },
-          primaryMethod: "serviceAccount",
-          success: false
-        }
-      });
-    }
-
+    console.log(`Attempting to get data from spreadsheet: ${spreadsheetId}, sheet: ${sheetName}`);
     const auth = getServiceAccountAuth();
     await auth.authorize();
+    console.log('Service account authorized successfully');
 
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `${sheetName}!A:AA`
     });
 
+    console.log('Data retrieved successfully');
     res.json({
       data: response.data.values || []
     });
   } catch (error) {
     console.error("Error getting sheet data:", error);
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    });
+    
     res.status(500).json({
       success: false,
       message: "Failed to get sheet data",
+      error: error.message,
       results: {
         methods: {
           serviceAccount: false,
@@ -243,6 +254,10 @@ app.get('/', (req, res) => {
       logData: "POST /api/log-data-to-sheet",
       getSheetData: "POST /api/get-sheet-data",
       serviceAccount: "GET /api/service-account"
+    },
+    defaults: {
+      spreadsheetId: DEFAULT_SPREADSHEET_ID,
+      sheetName: DEFAULT_SHEET_NAME
     }
   });
 });

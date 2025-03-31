@@ -149,24 +149,6 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
     // Handle single transaction
     const transactionId = generateTransactionId();
     
-    // Clear the sheet completely
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: `${sheetName}!A:AC`
-    });
-
-    // Add headers with new expanded format
-    const headers = [
-      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
-    ];
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1:AC1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: headers }
-    });
-
     // Add data in row 2 with expanded columns
     const values = [[
       transactionId,                    // Transaction ID
@@ -200,6 +182,25 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
       data.processed || ""              // Processed
     ]];
 
+    // First set the headers to ensure all columns are present
+    const headers = [
+      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
+    ];
+
+    // Clear the sheet and set headers
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `${sheetName}!A:AC`
+    });
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A1:AC1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: headers }
+    });
+
+    // Write data with explicit range
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${sheetName}!A2:AC2`,

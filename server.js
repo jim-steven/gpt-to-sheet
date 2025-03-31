@@ -10,86 +10,52 @@ require("dotenv").config();
 // Express app setup
 const app = express();
 
-// Configure CORS with specific options
-const corsOptions = {
+// Middleware
+app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  exposedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  preflightContinue: false,
-  maxAge: 86400 // 24 hours
-};
-
-// Apply CORS middleware
-app.use(cors(corsOptions));
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
-
-// Handle preflight requests
-app.options('*', cors(corsOptions));
+app.use(express.urlencoded({ extended: true }));
 
 // Helper function to generate transaction IDs
 const generateTransactionId = (prefix = 'TXN') => {
   return `${prefix}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 };
 
-// Create service account client with explicit configuration
-let auth;
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
-  const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-  auth = new google.auth.JWT(
-    credentials.client_email,
-    null,
-    credentials.private_key,
-    ['https://www.googleapis.com/auth/spreadsheets'],
-    null
-  );
-} else {
-  throw new Error('GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable is required');
-}
-
-// Initialize sheets API with explicit configuration
-const sheets = google.sheets({ 
-  version: 'v4', 
-  auth,
-  headers: {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json'
-  }
-});
-
-// Middleware to ensure service account is authenticated
-const ensureServiceAccount = async (req, res, next) => {
+// Initialize service account auth
+const getServiceAccountAuth = () => {
   try {
-    await auth.authorize();
-    req.serviceAccount = auth.email;
-    next();
+    // Get credentials from environment variable
+    const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+    
+    // Create a new JWT client
+    const auth = new google.auth.JWT(
+      credentials.client_email,
+      null,
+      credentials.private_key,
+      ['https://www.googleapis.com/auth/spreadsheets']
+    );
+
+    // Set the key algorithm
+    auth.keyAlgorithm = 'RS256';
+    
+    return auth;
   } catch (error) {
-    console.error("Service account authentication error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Service account authentication failed",
-      results: {
-        methods: {
-          serviceAccount: false,
-          oauth: false,
-          queue: false
-        },
-        primaryMethod: "serviceAccount",
-        success: false
-      }
-    });
+    console.error('Error initializing service account:', error);
+    throw error;
   }
 };
-
-// Apply service account middleware to all routes
-app.use(ensureServiceAccount);
 
 // Get service account email
 app.get("/api/service-account", async (req, res) => {
   try {
+    const auth = getServiceAccountAuth();
+    await auth.authorize();
+    
     res.json({ 
-      serviceAccount: req.serviceAccount,
+      serviceAccount: auth.email,
       success: true,
       results: {
         methods: {
@@ -140,6 +106,13 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
   }
 
   try {
+    // Get service account auth
+    const auth = getServiceAccountAuth();
+    await auth.authorize();
+    
+    // Create sheets client
+    const sheets = google.sheets({ version: 'v4', auth });
+
     // Handle single transaction
     if (!Array.isArray(data)) {
       const transactionId = generateTransactionId();
@@ -315,8 +288,15 @@ app.post("/api/get-sheet-data", async (req, res) => {
       }
     });
   }
-
+  
   try {
+    // Get service account auth
+    const auth = getServiceAccountAuth();
+    await auth.authorize();
+    
+    // Create sheets client
+    const sheets = google.sheets({ version: 'v4', auth });
+
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `${sheetName}!A:AC`
@@ -352,6 +332,13 @@ app.post("/api/set-sheet-headers", async (req, res) => {
   }
   
   try {
+    // Get service account auth
+    const auth = getServiceAccountAuth();
+    await auth.authorize();
+    
+    // Create sheets client
+    const sheets = google.sheets({ version: 'v4', auth });
+
     // Add headers
     const headers = [
       ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]

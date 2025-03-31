@@ -77,7 +77,7 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
       // Clear the sheet completely
       await sheets.spreadsheets.values.clear({
         spreadsheetId,
-        range: `${sheetName}!A:Z`
+        range: `${sheetName}!A:AC`
       });
 
       // Add headers with new expanded format
@@ -152,7 +152,7 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
     // Clear the sheet completely
     await sheets.spreadsheets.values.clear({
       spreadsheetId,
-      range: `${sheetName}!A:Z`
+      range: `${sheetName}!A:AC`
     });
 
     // Add headers with new expanded format

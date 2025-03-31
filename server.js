@@ -37,18 +37,15 @@ const generateTransactionId = (prefix = 'TXN') => {
 let auth;
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
   const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-  auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    keyFile: null, // Explicitly set to null to prevent file-based auth
-    projectId: credentials.project_id
-  });
+  auth = new google.auth.JWT(
+    credentials.client_email,
+    null,
+    credentials.private_key,
+    ['https://www.googleapis.com/auth/spreadsheets'],
+    null
+  );
 } else {
-  auth = new google.auth.GoogleAuth({
-    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    projectId: process.env.GOOGLE_CLOUD_PROJECT
-  });
+  throw new Error('GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable is required');
 }
 
 // Initialize sheets API with explicit configuration
@@ -64,8 +61,8 @@ const sheets = google.sheets({
 // Middleware to ensure service account is authenticated
 const ensureServiceAccount = async (req, res, next) => {
   try {
-    const client = await auth.getClient();
-    req.serviceAccount = client.email;
+    await auth.authorize();
+    req.serviceAccount = auth.email;
     next();
   } catch (error) {
     console.error("Service account authentication error:", error);

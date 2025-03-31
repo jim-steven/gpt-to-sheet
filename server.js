@@ -126,9 +126,6 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
     await auth.authorize();
     console.log('Service account authorized successfully');
 
-    // Convert data to array format
-    const values = Array.isArray(data) ? data : [data];
-    
     // Define headers in the correct order
     const headers = [
       'Transaction ID', 'Date', 'Time', 'Account Name', 'Transaction Type', 
@@ -140,6 +137,28 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
       'Transfer Method', 'Reference ID', 'Notes', 'Processed'
     ];
 
+    // First, check if headers exist
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!A1:AC1`
+    });
+
+    // If no headers exist or they don't match, set them
+    if (!headerResponse.data.values || headerResponse.data.values[0].join('\t') !== headers.join('\t')) {
+      console.log('Setting headers in sheet');
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${sheetName}!A1:AC1`,
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [headers]
+        }
+      });
+    }
+
+    // Convert data to array format
+    const values = Array.isArray(data) ? data : [data];
+    
     // Generate receipt ID for bulk transactions or transaction ID for single transactions
     const receiptId = Array.isArray(data) ? generateTransactionId('REC') : null;
     
@@ -149,6 +168,7 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
         ? `${receiptId}-ITEM-${index + 1}`
         : generateTransactionId('TXN');
 
+      // Map data to match header order exactly
       return [
         transactionId,
         item.date || '',

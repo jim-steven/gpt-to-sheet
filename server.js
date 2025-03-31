@@ -249,12 +249,23 @@ app.post("/api/get-sheet-data", async (req, res) => {
   }
 
   try {
-    // Get the actual data with all columns
+    // First set the headers to ensure all columns are present
+    const headers = [
+      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
+    ];
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A1:AC1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: headers }
+    });
+
+    // Now get the data
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `${sheetName}!A1:AC`,
-      valueRenderOption: 'UNFORMATTED_VALUE',
-      dateTimeRenderOption: 'FORMATTED_STRING'
+      majorDimension: 'ROWS'
     });
 
     res.json({ data: response.data.values || [] });

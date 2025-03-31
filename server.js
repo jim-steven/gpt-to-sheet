@@ -249,19 +249,12 @@ app.post("/api/get-sheet-data", async (req, res) => {
   }
 
   try {
-    // First get the sheet metadata to determine the number of rows
-    const sheetsResponse = await sheets.spreadsheets.get({
-      spreadsheetId,
-      ranges: [`${sheetName}!A:AC`],
-      fields: 'sheets.properties'
-    });
-
-    const rowCount = sheetsResponse.data.sheets[0].properties.gridProperties.rowCount || 1000;
-
-    // Now get the actual data with a specific range
+    // Get the actual data with all columns
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!A1:AC${rowCount}`
+      range: `${sheetName}!A1:AC`,
+      valueRenderOption: 'UNFORMATTED_VALUE',
+      dateTimeRenderOption: 'FORMATTED_STRING'
     });
 
     res.json({ data: response.data.values || [] });

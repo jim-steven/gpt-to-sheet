@@ -2,6 +2,7 @@
 const express = require("express");
 const { google } = require("googleapis");
 const cors = require("cors");
+const crypto = require('node:crypto');
 
 // Environment configuration
 require("dotenv").config();
@@ -10,6 +11,11 @@ require("dotenv").config();
 const app = express();
 app.use(express.json());
 app.use(cors());
+
+// Helper function to generate transaction IDs
+const generateTransactionId = (prefix = 'TXN') => {
+  return `${prefix}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+};
 
 // Create service account client
 let auth;
@@ -43,28 +49,123 @@ app.get("/api/service-account", async (req, res) => {
   }
 });
 
-// Log data to Google Sheets
+// Log data to Google Sheets with legacy format support
 app.post("/api/log-data-to-sheet", async (req, res) => {
-  const { spreadsheetId, sheetName, userMessage, assistantResponse, timestamp } = req.body;
+  const { spreadsheetId, sheetName, data, meta } = req.body;
 
-  if (!spreadsheetId || !sheetName || !userMessage || !assistantResponse) {
-    return res.status(400).json({ error: "Missing required parameters" });
+  if (!spreadsheetId || !sheetName) {
+    return res.status(400).json({ 
+      success: false,
+      message: "Missing required parameters",
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false
+      }
+    });
   }
 
   try {
-    const response = await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${sheetName}!A:C`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[userMessage, assistantResponse, timestamp || new Date().toISOString()]],
-      },
-    });
+    // Handle bulk transaction
+    if (Array.isArray(data)) {
+      const receiptId = generateTransactionId('REC');
+      const values = data.map((item, index) => {
+        const txnId = `${receiptId}-ITEM-${index + 1}`;
+        return [
+          meta.date,
+          meta.time,
+          meta.accountName,
+          meta.transactionType,
+          meta.category,
+          item.amount,
+          meta.establishment,
+          meta.receiptNumber,
+          item.item,
+          meta.paymentMethod,
+          txnId
+        ];
+      });
 
-    res.json({ message: "Data logged successfully!", response: response.data });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${sheetName}!A:K`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values }
+      });
+
+      return res.json({
+        success: true,
+        message: `Successfully logged all ${data.length} items from receipt`,
+        receiptId,
+        results: data.map((item, index) => ({
+          item: item.item,
+          transactionId: `${receiptId}-ITEM-${index + 1}`,
+          success: true,
+          method: "serviceAccount"
+        })),
+        method: "serviceAccount"
+      });
+    }
+    
+    // Handle single transaction
+    else {
+      const transactionId = generateTransactionId();
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${sheetName}!A:K`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[
+            data.date,
+            data.time,
+            data.accountName,
+            data.transactionType,
+            data.category,
+            data.amount,
+            data.establishment,
+            data.receiptNumber,
+            data.items.join(", "),
+            data.paymentMethod,
+            transactionId
+          ]]
+        }
+      });
+
+      return res.json({
+        success: true,
+        message: "Transaction logged successfully",
+        transactionId,
+        results: {
+          methods: {
+            serviceAccount: true,
+            oauth: false,
+            queue: false
+          },
+          primaryMethod: "serviceAccount",
+          success: true
+        }
+      });
+    }
   } catch (error) {
     console.error("Logging error:", error);
-    res.status(500).json({ error: "Failed to write to sheet", details: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Failed to write to sheet",
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false,
+        error: error.message
+      }
+    });
   }
 });
 
@@ -79,7 +180,7 @@ app.post("/api/get-sheet-data", async (req, res) => {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: range || `${sheetName}!A:C`,
+      range: range || `${sheetName}!A:K`,
     });
 
     res.json({ data: response.data.values });

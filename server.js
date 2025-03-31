@@ -94,35 +94,35 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
 
       // Add data starting from row 2 with expanded columns
       const values = data.map((item, index) => [
-        `${receiptId}-ITEM-${index + 1}`,
-        meta.date || "",
-        meta.time || "",
-        meta.accountName || "",
-        meta.transactionType || "",
-        meta.category || "",
-        meta.allowances || "",
-        meta.deductions || "",
-        item.item || "",
-        meta.establishment || "",
-        meta.receiptNumber || "",
-        item.amount || "",
-        meta.paymentMethod || "",
-        meta.cardUsed || "",
-        meta.linkedBudgetCategory || "",
-        meta.onlineTransactionId || "",
-        meta.mappedOnlineVendor || "",
-        meta.reimbursable || "",
-        meta.reimbursementStatus || "",
-        meta.interestType || "",
-        meta.taxWithheld || "",
-        meta.taxDeductible || "",
-        meta.taxCategory || "",
-        meta.bankIdentifier || "",
-        meta.transactionMethod || "",
-        meta.transferMethod || "",
-        meta.referenceId || "",
-        meta.notes || "",
-        meta.processed || ""
+        `${receiptId}-ITEM-${index + 1}`,  // Transaction ID
+        meta.date || "",                    // Date
+        meta.time || "",                    // Time
+        meta.accountName || "",             // Account Name
+        meta.transactionType || "",         // Transaction Type
+        meta.category || "",                // Category
+        meta.allowances || "",              // Allowances
+        meta.deductions || "",              // Deductions
+        item.item || "",                    // Items
+        meta.establishment || "",           // Establishment
+        meta.receiptNumber || "",           // Receipt Number
+        item.amount || "",                  // Amount
+        meta.paymentMethod || "",           // Payment Method
+        meta.cardUsed || "",                // Card Used
+        meta.linkedBudgetCategory || "",    // Linked Budget Category
+        meta.onlineTransactionId || "",     // Online Transaction ID
+        meta.mappedOnlineVendor || "",      // Mapped Online Vendor
+        meta.reimbursable || "",            // Reimbursable
+        meta.reimbursementStatus || "",     // Reimbursement Status
+        meta.interestType || "",            // Interest Type
+        meta.taxWithheld || "",             // Tax Withheld
+        meta.taxDeductible || "",           // Tax Deductible
+        meta.taxCategory || "",             // Tax Category
+        meta.bankIdentifier || "",          // Bank Identifier
+        meta.transactionMethod || "",       // Transaction Method
+        meta.transferMethod || "",          // Transfer Method
+        meta.referenceId || "",             // Reference ID
+        meta.notes || "",                   // Notes
+        meta.processed || ""                // Processed
       ]);
 
       await sheets.spreadsheets.values.update({
@@ -169,35 +169,35 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
 
     // Add data in row 2 with expanded columns
     const values = [[
-      transactionId,
-      data.date || "",
-      data.time || "",
-      data.accountName || "",
-      data.transactionType || "",
-      data.category || "",
-      data.allowances || "",
-      data.deductions || "",
-      data.items.join(', ') || "",
-      data.establishment || "",
-      data.receiptNumber || "",
-      data.amount || "",
-      data.paymentMethod || "",
-      data.cardUsed || "",
-      data.linkedBudgetCategory || "",
-      data.onlineTransactionId || "",
-      data.mappedOnlineVendor || "",
-      data.reimbursable || "",
-      data.reimbursementStatus || "",
-      data.interestType || "",
-      data.taxWithheld || "",
-      data.taxDeductible || "",
-      data.taxCategory || "",
-      data.bankIdentifier || "",
-      data.transactionMethod || "",
-      data.transferMethod || "",
-      data.referenceId || "",
-      data.notes || "",
-      data.processed || ""
+      transactionId,                    // Transaction ID
+      data.date || "",                  // Date
+      data.time || "",                  // Time
+      data.accountName || "",           // Account Name
+      data.transactionType || "",       // Transaction Type
+      data.category || "",              // Category
+      data.allowances || "",            // Allowances
+      data.deductions || "",            // Deductions
+      data.items?.join(', ') || "",     // Items
+      data.establishment || "",         // Establishment
+      data.receiptNumber || "",         // Receipt Number
+      data.amount || "",                // Amount
+      data.paymentMethod || "",         // Payment Method
+      data.cardUsed || "",              // Card Used
+      data.linkedBudgetCategory || "",  // Linked Budget Category
+      data.onlineTransactionId || "",   // Online Transaction ID
+      data.mappedOnlineVendor || "",    // Mapped Online Vendor
+      data.reimbursable || "",          // Reimbursable
+      data.reimbursementStatus || "",   // Reimbursement Status
+      data.interestType || "",          // Interest Type
+      data.taxWithheld || "",           // Tax Withheld
+      data.taxDeductible || "",         // Tax Deductible
+      data.taxCategory || "",           // Tax Category
+      data.bankIdentifier || "",        // Bank Identifier
+      data.transactionMethod || "",     // Transaction Method
+      data.transferMethod || "",        // Transfer Method
+      data.referenceId || "",           // Reference ID
+      data.notes || "",                 // Notes
+      data.processed || ""              // Processed
     ]];
 
     await sheets.spreadsheets.values.update({
@@ -249,9 +249,19 @@ app.post("/api/get-sheet-data", async (req, res) => {
   }
 
   try {
+    // First get the sheet metadata to determine the number of rows
+    const sheetsResponse = await sheets.spreadsheets.get({
+      spreadsheetId,
+      ranges: [`${sheetName}!A:AC`],
+      fields: 'sheets.properties'
+    });
+
+    const rowCount = sheetsResponse.data.sheets[0].properties.gridProperties.rowCount || 1000;
+
+    // Now get the actual data with a specific range
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!A:AC`
+      range: `${sheetName}!A1:AC${rowCount}`
     });
 
     res.json({ data: response.data.values || [] });

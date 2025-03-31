@@ -9,8 +9,18 @@ require("dotenv").config();
 
 // Express app setup
 const app = express();
+
+// Configure CORS
+const corsOptions = {
+  origin: '*', // Allow all origins
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  preflightContinue: false
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
-app.use(cors());
 
 // Helper function to generate transaction IDs
 const generateTransactionId = (prefix = 'TXN') => {
@@ -36,6 +46,9 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
 
 // Initialize sheets API
 const sheets = google.sheets({ version: 'v4', auth });
+
+// Middleware to handle OPTIONS requests
+app.options('*', cors(corsOptions));
 
 // Get service account email
 app.get("/api/service-account", async (req, res) => {
@@ -70,148 +83,133 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
   }
 
   try {
-    // Handle bulk transaction
-    if (Array.isArray(data)) {
-      const receiptId = generateTransactionId('REC');
+    // Handle single transaction
+    if (!Array.isArray(data)) {
+      const transactionId = generateTransactionId();
       
-      // Clear the sheet completely
-      await sheets.spreadsheets.values.clear({
-        spreadsheetId,
-        range: `${sheetName}!A:AC`
-      });
-
-      // Add headers with new expanded format
-      const headers = [
-        ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
+      // Prepare the row data
+      const rowData = [
+        transactionId,
+        data.date || "",
+        data.time || "",
+        data.accountName || "",
+        data.transactionType || "",
+        data.category || "",
+        data.allowances || "",
+        data.deductions || "",
+        "", // Items (empty for single transaction)
+        data.establishment || "",
+        data.receiptNumber || "",
+        data.amount || 0,
+        data.paymentMethod || "",
+        data.cardUsed || "",
+        data.linkedBudgetCategory || "",
+        data.onlineTransactionId || "",
+        data.mappedOnlineVendor || "",
+        data.reimbursable || "",
+        data.reimbursementStatus || "",
+        data.interestType || "",
+        data.taxWithheld || 0,
+        data.taxDeductible || "",
+        data.taxCategory || "",
+        data.bankIdentifier || "",
+        data.transactionMethod || "",
+        data.transferMethod || "",
+        data.referenceId || "",
+        data.notes || "",
+        data.processed || "false"
       ];
 
-      await sheets.spreadsheets.values.update({
+      // Append the row to the sheet
+      await sheets.spreadsheets.values.append({
         spreadsheetId,
-        range: `${sheetName}!A1:AC1`,
+        range: `${sheetName}!A:AC`,
         valueInputOption: "USER_ENTERED",
-        requestBody: { values: headers }
-      });
-
-      // Add data starting from row 2 with expanded columns
-      const values = data.map((item, index) => [
-        `${receiptId}-ITEM-${index + 1}`,  // Transaction ID
-        meta.date || "",                    // Date
-        meta.time || "",                    // Time
-        meta.accountName || "",             // Account Name
-        meta.transactionType || "",         // Transaction Type
-        meta.category || "",                // Category
-        meta.allowances || "",              // Allowances
-        meta.deductions || "",              // Deductions
-        item.item || "",                    // Items
-        meta.establishment || "",           // Establishment
-        meta.receiptNumber || "",           // Receipt Number
-        item.amount || "",                  // Amount
-        meta.paymentMethod || "",           // Payment Method
-        meta.cardUsed || "",                // Card Used
-        meta.linkedBudgetCategory || "",    // Linked Budget Category
-        meta.onlineTransactionId || "",     // Online Transaction ID
-        meta.mappedOnlineVendor || "",      // Mapped Online Vendor
-        meta.reimbursable || "",            // Reimbursable
-        meta.reimbursementStatus || "",     // Reimbursement Status
-        meta.interestType || "",            // Interest Type
-        meta.taxWithheld || "",             // Tax Withheld
-        meta.taxDeductible || "",           // Tax Deductible
-        meta.taxCategory || "",             // Tax Category
-        meta.bankIdentifier || "",          // Bank Identifier
-        meta.transactionMethod || "",       // Transaction Method
-        meta.transferMethod || "",          // Transfer Method
-        meta.referenceId || "",             // Reference ID
-        meta.notes || "",                   // Notes
-        meta.processed || ""                // Processed
-      ]);
-
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${sheetName}!A2:AC${values.length + 1}`,
-        valueInputOption: "USER_ENTERED",
-        requestBody: { values }
+        requestBody: { values: [rowData] }
       });
 
       return res.json({
         success: true,
-        message: `Successfully logged all ${data.length} items from receipt`,
-        receiptId,
-        results: data.map((item, index) => ({
-          item: item.item,
-          transactionId: `${receiptId}-ITEM-${index + 1}`,
-          success: true,
-          method: "serviceAccount"
-        })),
-        method: "serviceAccount"
+        message: "Transaction logged successfully",
+        transactionId,
+        results: {
+          methods: {
+            serviceAccount: true,
+            oauth: false,
+            queue: false
+          },
+          primaryMethod: "serviceAccount",
+          success: true
+        }
       });
     }
-    
-    // Handle single transaction
-    const transactionId = generateTransactionId();
-    
-    // Add data in row 2 with expanded columns
-    const values = [[
-      transactionId,                    // Transaction ID
-      data.date || "",                  // Date
-      data.time || "",                  // Time
-      data.accountName || "",           // Account Name
-      data.transactionType || "",       // Transaction Type
-      data.category || "",              // Category
-      data.allowances || "",            // Allowances
-      data.deductions || "",            // Deductions
-      data.items?.join(', ') || "",     // Items
-      data.establishment || "",         // Establishment
-      data.receiptNumber || "",         // Receipt Number
-      data.amount || "",                // Amount
-      data.paymentMethod || "",         // Payment Method
-      data.cardUsed || "",              // Card Used
-      data.linkedBudgetCategory || "",  // Linked Budget Category
-      data.onlineTransactionId || "",   // Online Transaction ID
-      data.mappedOnlineVendor || "",    // Mapped Online Vendor
-      data.reimbursable || "",          // Reimbursable
-      data.reimbursementStatus || "",   // Reimbursement Status
-      data.interestType || "",          // Interest Type
-      data.taxWithheld || "",           // Tax Withheld
-      data.taxDeductible || "",         // Tax Deductible
-      data.taxCategory || "",           // Tax Category
-      data.bankIdentifier || "",        // Bank Identifier
-      data.transactionMethod || "",     // Transaction Method
-      data.transferMethod || "",        // Transfer Method
-      data.referenceId || "",           // Reference ID
-      data.notes || "",                 // Notes
-      data.processed || ""              // Processed
-    ]];
 
-    // First set the headers to ensure all columns are present
-    const headers = [
-      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
-    ];
-
-    // Clear the sheet and set headers
+    // Handle bulk transaction
+    const receiptId = generateTransactionId('REC');
+    
+    // Clear the sheet completely
     await sheets.spreadsheets.values.clear({
       spreadsheetId,
       range: `${sheetName}!A:AC`
     });
 
+    // Add headers with new expanded format
+    const headers = [
+      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
+    ];
+
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A1:AC1`,
+      range: `${sheetName}!A1`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: headers }
     });
 
-    // Write data with explicit range
+    // Add data starting from row 2 with expanded columns
+    const values = data.map((item, index) => [
+      `${receiptId}-ITEM-${index + 1}`,  // Transaction ID
+      meta.date || "",                    // Date
+      meta.time || "",                    // Time
+      meta.accountName || "",             // Account Name
+      meta.transactionType || "",         // Transaction Type
+      meta.category || "",                // Category
+      meta.allowances || "",              // Allowances
+      meta.deductions || "",              // Deductions
+      item.item || "",                    // Items
+      meta.establishment || "",           // Establishment
+      meta.receiptNumber || "",           // Receipt Number
+      item.amount || 0,                   // Amount
+      meta.paymentMethod || "",           // Payment Method
+      meta.cardUsed || "",                // Card Used
+      meta.linkedBudgetCategory || "",    // Linked Budget Category
+      meta.onlineTransactionId || "",     // Online Transaction ID
+      meta.mappedOnlineVendor || "",      // Mapped Online Vendor
+      meta.reimbursable || "",            // Reimbursable
+      meta.reimbursementStatus || "",     // Reimbursement Status
+      meta.interestType || "",            // Interest Type
+      meta.taxWithheld || 0,              // Tax Withheld
+      meta.taxDeductible || "",           // Tax Deductible
+      meta.taxCategory || "",             // Tax Category
+      meta.bankIdentifier || "",          // Bank Identifier
+      meta.transactionMethod || "",       // Transaction Method
+      meta.transferMethod || "",          // Transfer Method
+      meta.referenceId || "",             // Reference ID
+      meta.notes || "",                   // Notes
+      meta.processed || "false"           // Processed
+    ]);
+
+    // Append the data to the sheet
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A2:AC2`,
+      range: `${sheetName}!A2`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values }
     });
 
     return res.json({
       success: true,
-      message: "Transaction logged successfully",
-      transactionId,
+      message: "Bulk transactions logged successfully",
+      receiptId,
       results: {
         methods: {
           serviceAccount: true,
@@ -222,9 +220,10 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
         success: true
       }
     });
+
   } catch (error) {
-    console.error("Logging error:", error);
-    res.status(500).json({
+    console.error("Error writing to sheet:", error);
+    return res.status(500).json({
       success: false,
       message: "Failed to write to sheet",
       results: {
@@ -234,8 +233,7 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
           queue: false
         },
         primaryMethod: "serviceAccount",
-        success: false,
-        error: error.message
+        success: false
       }
     });
   }
@@ -246,33 +244,45 @@ app.post("/api/get-sheet-data", async (req, res) => {
   const { spreadsheetId, sheetName } = req.body;
 
   if (!spreadsheetId || !sheetName) {
-    return res.status(400).json({ error: "Missing required parameters" });
-  }
-
-  try {
-    // First set the headers to ensure all columns are present
-    const headers = [
-      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
-    ];
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1:AC1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: headers }
+    return res.status(400).json({
+      success: false,
+      message: "Missing required parameters",
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false
+      }
     });
-
-    // Now get the data
+  }
+  
+  try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!A1:AC`,
-      majorDimension: 'ROWS'
+      range: `${sheetName}!A:AC`
     });
 
-    res.json({ data: response.data.values || [] });
+    return res.json({
+      data: response.data.values || []
+    });
   } catch (error) {
-    console.error("Error getting sheet data:", error);
-    res.status(500).json({ error: "Failed to get sheet data" });
+    console.error("Error reading from sheet:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to read from sheet",
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false
+      }
+    });
   }
 });
 
@@ -283,7 +293,7 @@ app.post("/api/set-sheet-headers", async (req, res) => {
   if (!spreadsheetId || !sheetName) {
     return res.status(400).json({ error: "Missing required parameters" });
   }
-
+  
   try {
     // Add headers
     const headers = [
@@ -296,7 +306,7 @@ app.post("/api/set-sheet-headers", async (req, res) => {
       valueInputOption: "USER_ENTERED",
       requestBody: { values: headers }
     });
-
+    
     res.json({
       success: true,
       message: "Headers set successfully"
@@ -319,9 +329,9 @@ app.get('/', (req, res) => {
   });
 });
 
-// Start Server
+// Start the server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
 

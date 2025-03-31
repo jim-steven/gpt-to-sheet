@@ -5,33 +5,80 @@
   "info": {
     "title": "GPT-to-Sheet API",
     "description": "API for logging financial transactions to Google Sheets using service account authentication.",
-    "version": "2.0.0"
+    "version": "2.0.0",
+    "contact": {
+      "name": "API Support",
+      "email": "support@example.com"
+    }
   },
   "servers": [
     {
-      "url": "https://gpt-to-sheet.onrender.com"
+      "url": "https://gpt-to-sheet.onrender.com",
+      "description": "Production server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "transactions",
+      "description": "Transaction management endpoints"
+    },
+    {
+      "name": "sheets",
+      "description": "Google Sheets operations"
     }
   ],
   "paths": {
     "/api/log-data-to-sheet": {
       "post": {
+        "tags": ["transactions"],
         "summary": "Log transaction to Google Sheets",
         "description": "Logs single or bulk transactions to a specified Google Sheet using service account authentication.",
         "operationId": "logDataToSheet",
-        "security": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/SingleTransactionRequest"
+                "type": "object",
+                "required": ["spreadsheetId", "sheetName"],
+                "properties": {
+                  "spreadsheetId": {
+                    "type": "string",
+                    "description": "The ID of the Google Sheet to write to"
                   },
-                  {
-                    "$ref": "#/components/schemas/BulkTransactionRequest"
+                  "sheetName": {
+                    "type": "string",
+                    "description": "The name of the sheet within the spreadsheet"
+                  },
+                  "data": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/TransactionData"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": ["item", "amount"],
+                          "properties": {
+                            "item": {
+                              "type": "string",
+                              "description": "Item name"
+                            },
+                            "amount": {
+                              "type": "number",
+                              "description": "Item amount",
+                              "format": "float"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "meta": {
+                    "$ref": "#/components/schemas/TransactionData"
                   }
-                ]
+                }
               }
             }
           }
@@ -52,12 +99,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -67,15 +109,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "details": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -85,16 +119,27 @@
     },
     "/api/get-sheet-data": {
       "post": {
+        "tags": ["sheets"],
         "summary": "Get data from Google Sheets",
         "description": "Retrieves data from a specified Google Sheet using service account authentication.",
         "operationId": "getSheetData",
-        "security": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GetDataRequest"
+                "type": "object",
+                "required": ["spreadsheetId", "sheetName"],
+                "properties": {
+                  "spreadsheetId": {
+                    "type": "string",
+                    "description": "The ID of the Google Sheet to read from"
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "The name of the sheet within the spreadsheet"
+                  }
+                }
               }
             }
           }
@@ -115,12 +160,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -130,15 +170,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "details": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -148,10 +180,10 @@
     },
     "/api/service-account": {
       "get": {
+        "tags": ["sheets"],
         "summary": "Get service account email",
         "description": "Returns the email address of the service account being used.",
         "operationId": "getServiceAccount",
-        "security": [],
         "responses": {
           "200": {
             "description": "Successfully retrieved service account email",
@@ -195,11 +227,13 @@
         "properties": {
           "date": {
             "type": "string",
-            "description": "Transaction date (YYYY-MM-DD)"
+            "description": "Transaction date (YYYY-MM-DD)",
+            "format": "date"
           },
           "time": {
             "type": "string",
-            "description": "Transaction time (HH:mm:ss)"
+            "description": "Transaction time (HH:mm:ss)",
+            "format": "time"
           },
           "accountName": {
             "type": "string",
@@ -213,20 +247,26 @@
             "type": "string",
             "description": "Transaction category"
           },
+          "allowances": {
+            "type": "string",
+            "description": "Allowances"
+          },
+          "deductions": {
+            "type": "string",
+            "description": "Deductions"
+          },
           "amount": {
             "type": "number",
-            "description": "Transaction amount"
+            "description": "Transaction amount",
+            "format": "float"
           },
           "establishment": {
             "type": "string",
             "description": "Establishment name"
           },
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "List of items"
+          "receiptNumber": {
+            "type": "string",
+            "description": "Receipt number"
           },
           "paymentMethod": {
             "type": "string",
@@ -262,7 +302,8 @@
           },
           "taxWithheld": {
             "type": "number",
-            "description": "Tax withheld amount"
+            "description": "Tax withheld amount",
+            "format": "float"
           },
           "taxDeductible": {
             "type": "string",
@@ -298,67 +339,6 @@
           }
         }
       },
-      "SingleTransactionRequest": {
-        "type": "object",
-        "required": [
-          "spreadsheetId",
-          "sheetName",
-          "data"
-        ],
-        "properties": {
-          "spreadsheetId": {
-            "type": "string",
-            "description": "The ID of the Google Sheet to write to"
-          },
-          "sheetName": {
-            "type": "string",
-            "description": "The name of the sheet within the spreadsheet"
-          },
-          "data": {
-            "$ref": "#/components/schemas/TransactionData"
-          }
-        }
-      },
-      "BulkTransactionRequest": {
-        "type": "object",
-        "required": [
-          "spreadsheetId",
-          "sheetName",
-          "data",
-          "meta"
-        ],
-        "properties": {
-          "spreadsheetId": {
-            "type": "string",
-            "description": "The ID of the Google Sheet to write to"
-          },
-          "sheetName": {
-            "type": "string",
-            "description": "The name of the sheet within the spreadsheet"
-          },
-          "data": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["item", "amount"],
-              "properties": {
-                "item": {
-                  "type": "string",
-                  "description": "Item name"
-                },
-                "amount": {
-                  "type": "number",
-                  "description": "Item amount"
-                }
-              }
-            },
-            "description": "Array of items and their amounts"
-          },
-          "meta": {
-            "$ref": "#/components/schemas/TransactionData"
-          }
-        }
-      },
       "LogResponse": {
         "type": "object",
         "properties": {
@@ -372,11 +352,11 @@
           },
           "transactionId": {
             "type": "string",
-            "description": "Generated transaction ID for single transactions"
+            "description": "Generated transaction ID (format: TXN-XXXX)"
           },
           "receiptId": {
             "type": "string",
-            "description": "Generated receipt ID for bulk transactions"
+            "description": "Generated receipt ID (format: REC-XXXX)"
           },
           "results": {
             "type": "object",
@@ -405,23 +385,6 @@
           }
         }
       },
-      "GetDataRequest": {
-        "type": "object",
-        "required": [
-          "spreadsheetId",
-          "sheetName"
-        ],
-        "properties": {
-          "spreadsheetId": {
-            "type": "string",
-            "description": "The ID of the Google Sheet to read from"
-          },
-          "sheetName": {
-            "type": "string",
-            "description": "The name of the sheet within the spreadsheet"
-          }
-        }
-      },
       "GetDataResponse": {
         "type": "object",
         "properties": {
@@ -435,6 +398,42 @@
               },
               "minItems": 29,
               "maxItems": 29
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "results": {
+            "type": "object",
+            "properties": {
+              "methods": {
+                "type": "object",
+                "properties": {
+                  "serviceAccount": {
+                    "type": "boolean"
+                  },
+                  "oauth": {
+                    "type": "boolean"
+                  },
+                  "queue": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "primaryMethod": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              }
             }
           }
         }

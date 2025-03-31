@@ -128,20 +128,58 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
 
     // Convert data to array format
     const values = Array.isArray(data) ? data : [data];
+    
+    // Define headers in the correct order
     const headers = [
-      'Date', 'Time', 'Account Name', 'Transaction Type', 'Category',
-      'Allowances', 'Deductions', 'Amount', 'Establishment', 'Receipt Number',
-      'Payment Method', 'Card Used', 'Linked Budget Category', 'Online Transaction ID',
-      'Mapped Online Vendor', 'Reimbursable', 'Reimbursement Status', 'Interest Type',
-      'Tax Withheld', 'Tax Deductible', 'Tax Category', 'Bank Identifier',
-      'Transaction Method', 'Transfer Method', 'Reference ID', 'Notes', 'Processed'
+      'Transaction ID', 'Date', 'Time', 'Account Name', 'Transaction Type', 
+      'Category', 'Allowances', 'Deductions', 'Items', 'Establishment', 
+      'Receipt Number', 'Amount', 'Payment Method', 'Card Used', 
+      'Linked Budget Category', 'Online Transaction ID', 'Mapped Online Vendor', 
+      'Reimbursable', 'Reimbursement Status', 'Interest Type', 'Tax Withheld', 
+      'Tax Deductible', 'Tax Category', 'Bank Identifier', 'Transaction Method', 
+      'Transfer Method', 'Reference ID', 'Notes', 'Processed'
     ];
 
-    const rows = values.map(item => {
-      return headers.map(header => {
-        const key = header.toLowerCase().replace(/\s+/g, '');
-        return item[key] || '';
-      });
+    // Generate receipt ID for bulk transactions or transaction ID for single transactions
+    const receiptId = Array.isArray(data) ? generateTransactionId('REC') : null;
+    
+    const rows = values.map((item, index) => {
+      // Generate transaction ID
+      const transactionId = Array.isArray(data) 
+        ? `${receiptId}-ITEM-${index + 1}`
+        : generateTransactionId('TXN');
+
+      return [
+        transactionId,
+        item.date || '',
+        item.time || '',
+        item.accountName || '',
+        item.transactionType || '',
+        item.category || '',
+        item.allowances || '',
+        item.deductions || '',
+        item.items || '',
+        item.establishment || '',
+        item.receiptNumber || '',
+        item.amount || 0,
+        item.paymentMethod || '',
+        item.cardUsed || '',
+        item.linkedBudgetCategory || '',
+        item.onlineTransactionId || '',
+        item.mappedOnlineVendor || '',
+        item.reimbursable || '',
+        item.reimbursementStatus || '',
+        item.interestType || '',
+        item.taxWithheld || 0,
+        item.taxDeductible || '',
+        item.taxCategory || '',
+        item.bankIdentifier || '',
+        item.transactionMethod || '',
+        item.transferMethod || '',
+        item.referenceId || '',
+        item.notes || '',
+        item.processed || 'No'
+      ];
     });
 
     console.log('Prepared rows for insertion:', rows);
@@ -149,7 +187,7 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
     // Append data to sheet
     const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:AA`,
+      range: `${sheetName}!A:AC`,
       valueInputOption: 'RAW',
       requestBody: {
         values: rows
@@ -161,7 +199,8 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
     res.json({
       success: true,
       message: "Transaction logged successfully",
-      transactionId: generateTransactionId(),
+      transactionId: Array.isArray(data) ? receiptId : rows[0][0],
+      receiptId: Array.isArray(data) ? receiptId : null,
       results: {
         methods: {
           serviceAccount: true,

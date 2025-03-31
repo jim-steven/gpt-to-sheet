@@ -14,16 +14,13 @@ const app = express();
 const corsOptions = {
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  exposedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  preflightContinue: false,
-  maxAge: 86400 // 24 hours
+  allowedHeaders: ['Content-Type', 'Authorization']
 };
 
 // Apply CORS middleware
 app.use(cors(corsOptions));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Handle preflight requests
 app.options('*', cors(corsOptions));
@@ -57,49 +54,19 @@ const getServiceAccountAuth = () => {
   }
 };
 
-// Initialize sheets API with explicit configuration
+// Initialize sheets API
 const sheets = google.sheets({ 
   version: 'v4', 
-  auth: getServiceAccountAuth(),
-  headers: {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json'
-  }
+  auth: getServiceAccountAuth()
 });
 
-// Middleware to ensure service account is authenticated
-const ensureServiceAccount = async (req, res, next) => {
+// Get service account email
+app.get('/api/service-account', async (req, res) => {
   try {
     const auth = getServiceAccountAuth();
     await auth.authorize();
-    req.serviceAccount = auth.email;
-    next();
-  } catch (error) {
-    console.error("Service account authentication error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Service account authentication failed",
-      results: {
-        methods: {
-          serviceAccount: false,
-          oauth: false,
-          queue: false
-        },
-        primaryMethod: "serviceAccount",
-        success: false
-      }
-    });
-  }
-};
-
-// Apply service account middleware to all routes
-app.use(ensureServiceAccount);
-
-// Get service account email
-app.get("/api/service-account", async (req, res) => {
-  try {
-    res.json({ 
-      serviceAccount: req.serviceAccount,
+    res.json({
+      serviceAccount: auth.email,
       success: true,
       results: {
         methods: {
@@ -112,10 +79,10 @@ app.get("/api/service-account", async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("Error getting service account:", error);
-    res.status(500).json({ 
-      error: "Failed to get service account email",
+    console.error("Service account error:", error);
+    res.status(500).json({
       success: false,
+      message: "Failed to get service account",
       results: {
         methods: {
           serviceAccount: false,
@@ -129,154 +96,62 @@ app.get("/api/service-account", async (req, res) => {
   }
 });
 
-// Log data to Google Sheets with legacy format support
-app.post("/api/log-data-to-sheet", async (req, res) => {
-  const { spreadsheetId, sheetName, data, meta } = req.body;
-
-  if (!spreadsheetId || !sheetName) {
-    return res.status(400).json({ 
-      success: false,
-      message: "Missing required parameters",
-      results: {
-        methods: {
-          serviceAccount: true,
-          oauth: false,
-          queue: false
-        },
-        primaryMethod: "serviceAccount",
-        success: false
-      }
-    });
-  }
-
+// Log data to sheet
+app.post('/api/log-data-to-sheet', async (req, res) => {
   try {
-    // Handle single transaction
-    if (!Array.isArray(data)) {
-      const transactionId = generateTransactionId();
-      
-      // Prepare the row data
-      const rowData = [
-        transactionId,
-        data.date || "",
-        data.time || "",
-        data.accountName || "",
-        data.transactionType || "",
-        data.category || "",
-        data.allowances || "",
-        data.deductions || "",
-        "", // Items (empty for single transaction)
-        data.establishment || "",
-        data.receiptNumber || "",
-        data.amount || 0,
-        data.paymentMethod || "",
-        data.cardUsed || "",
-        data.linkedBudgetCategory || "",
-        data.onlineTransactionId || "",
-        data.mappedOnlineVendor || "",
-        data.reimbursable || "",
-        data.reimbursementStatus || "",
-        data.interestType || "",
-        data.taxWithheld || 0,
-        data.taxDeductible || "",
-        data.taxCategory || "",
-        data.bankIdentifier || "",
-        data.transactionMethod || "",
-        data.transferMethod || "",
-        data.referenceId || "",
-        data.notes || "",
-        data.processed || "false"
-      ];
+    const { spreadsheetId, sheetName, data } = req.body;
 
-      // Append the row to the sheet
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: `${sheetName}!A:AC`,
-        valueInputOption: "USER_ENTERED",
-        requestBody: { values: [rowData] }
-      });
-
-      return res.json({
-        success: true,
-        message: "Transaction logged successfully",
-        transactionId,
+    if (!spreadsheetId || !sheetName || !data) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required parameters",
         results: {
           methods: {
-            serviceAccount: true,
+            serviceAccount: false,
             oauth: false,
             queue: false
           },
           primaryMethod: "serviceAccount",
-          success: true
+          success: false
         }
       });
     }
 
-    // Handle bulk transaction
-    const receiptId = generateTransactionId('REC');
-    
-    // Clear the sheet completely
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: `${sheetName}!A:AC`
-    });
+    const auth = getServiceAccountAuth();
+    await auth.authorize();
 
-    // Add headers with new expanded format
+    // Convert data to array format
+    const values = Array.isArray(data) ? data : [data];
     const headers = [
-      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
+      'Date', 'Time', 'Account Name', 'Transaction Type', 'Category',
+      'Allowances', 'Deductions', 'Amount', 'Establishment', 'Receipt Number',
+      'Payment Method', 'Card Used', 'Linked Budget Category', 'Online Transaction ID',
+      'Mapped Online Vendor', 'Reimbursable', 'Reimbursement Status', 'Interest Type',
+      'Tax Withheld', 'Tax Deductible', 'Tax Category', 'Bank Identifier',
+      'Transaction Method', 'Transfer Method', 'Reference ID', 'Notes', 'Processed'
     ];
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: headers }
+    const rows = values.map(item => {
+      return headers.map(header => {
+        const key = header.toLowerCase().replace(/\s+/g, '');
+        return item[key] || '';
+      });
     });
 
-    // Add data starting from row 2 with expanded columns
-    const values = data.map((item, index) => [
-      `${receiptId}-ITEM-${index + 1}`,  // Transaction ID
-      meta.date || "",                    // Date
-      meta.time || "",                    // Time
-      meta.accountName || "",             // Account Name
-      meta.transactionType || "",         // Transaction Type
-      meta.category || "",                // Category
-      meta.allowances || "",              // Allowances
-      meta.deductions || "",              // Deductions
-      item.item || "",                    // Items
-      meta.establishment || "",           // Establishment
-      meta.receiptNumber || "",           // Receipt Number
-      item.amount || 0,                   // Amount
-      meta.paymentMethod || "",           // Payment Method
-      meta.cardUsed || "",                // Card Used
-      meta.linkedBudgetCategory || "",    // Linked Budget Category
-      meta.onlineTransactionId || "",     // Online Transaction ID
-      meta.mappedOnlineVendor || "",      // Mapped Online Vendor
-      meta.reimbursable || "",            // Reimbursable
-      meta.reimbursementStatus || "",     // Reimbursement Status
-      meta.interestType || "",            // Interest Type
-      meta.taxWithheld || 0,              // Tax Withheld
-      meta.taxDeductible || "",           // Tax Deductible
-      meta.taxCategory || "",             // Tax Category
-      meta.bankIdentifier || "",          // Bank Identifier
-      meta.transactionMethod || "",       // Transaction Method
-      meta.transferMethod || "",          // Transfer Method
-      meta.referenceId || "",             // Reference ID
-      meta.notes || "",                   // Notes
-      meta.processed || "false"           // Processed
-    ]);
-
-    // Append the data to the sheet
-    await sheets.spreadsheets.values.update({
+    // Append data to sheet
+    await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A2`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values }
+      range: `${sheetName}!A:AA`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: rows
+      }
     });
 
-    return res.json({
+    res.json({
       success: true,
-      message: "Bulk transactions logged successfully",
-      receiptId,
+      message: "Transaction logged successfully",
+      transactionId: generateTransactionId(),
       results: {
         methods: {
           serviceAccount: true,
@@ -287,15 +162,14 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
         success: true
       }
     });
-
   } catch (error) {
-    console.error("Error writing to sheet:", error);
-    return res.status(500).json({
+    console.error("Error logging data:", error);
+    res.status(500).json({
       success: false,
-      message: "Failed to write to sheet",
+      message: "Failed to log data",
       results: {
         methods: {
-          serviceAccount: true,
+          serviceAccount: false,
           oauth: false,
           queue: false
         },
@@ -307,42 +181,45 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
 });
 
 // Get sheet data
-app.post("/api/get-sheet-data", async (req, res) => {
-  const { spreadsheetId, sheetName } = req.body;
-
-  if (!spreadsheetId || !sheetName) {
-    return res.status(400).json({
-      success: false,
-      message: "Missing required parameters",
-      results: {
-        methods: {
-          serviceAccount: true,
-          oauth: false,
-          queue: false
-        },
-        primaryMethod: "serviceAccount",
-        success: false
-      }
-    });
-  }
-  
+app.post('/api/get-sheet-data', async (req, res) => {
   try {
+    const { spreadsheetId, sheetName } = req.body;
+
+    if (!spreadsheetId || !sheetName) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required parameters",
+        results: {
+          methods: {
+            serviceAccount: false,
+            oauth: false,
+            queue: false
+          },
+          primaryMethod: "serviceAccount",
+          success: false
+        }
+      });
+    }
+
+    const auth = getServiceAccountAuth();
+    await auth.authorize();
+
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!A:AC`
+      range: `${sheetName}!A:AA`
     });
 
-    return res.json({
+    res.json({
       data: response.data.values || []
     });
   } catch (error) {
-    console.error("Error reading from sheet:", error);
-    return res.status(500).json({
+    console.error("Error getting sheet data:", error);
+    res.status(500).json({
       success: false,
-      message: "Failed to read from sheet",
+      message: "Failed to get sheet data",
       results: {
         methods: {
-          serviceAccount: true,
+          serviceAccount: false,
           oauth: false,
           queue: false
         },
@@ -353,35 +230,9 @@ app.post("/api/get-sheet-data", async (req, res) => {
   }
 });
 
-// Set headers in Google Sheets
-app.post("/api/set-sheet-headers", async (req, res) => {
-  const { spreadsheetId, sheetName } = req.body;
-
-  if (!spreadsheetId || !sheetName) {
-    return res.status(400).json({ error: "Missing required parameters" });
-  }
-  
-  try {
-    // Add headers
-    const headers = [
-      ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]
-    ];
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1:AC1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: headers }
-    });
-    
-    res.json({
-      success: true,
-      message: "Headers set successfully"
-    });
-  } catch (error) {
-    console.error("Error setting headers:", error);
-    res.status(500).json({ error: "Failed to set headers", details: error.message });
-  }
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
 });
 
 // Root path route
@@ -397,7 +248,7 @@ app.get('/', (req, res) => {
 });
 
 // Start the server
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

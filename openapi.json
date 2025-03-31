@@ -1,0 +1,444 @@
+{
+  "x-openai-isConsequential": false,
+  "x-openai-baseUrl": "https://gpt-to-sheet.onrender.com",
+  "openapi": "3.1.0",
+  "info": {
+    "title": "GPT-to-Sheet API",
+    "description": "API for logging financial transactions to Google Sheets using service account authentication.",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://gpt-to-sheet.onrender.com"
+    }
+  ],
+  "paths": {
+    "/api/log-data-to-sheet": {
+      "post": {
+        "summary": "Log transaction to Google Sheets",
+        "description": "Logs single or bulk transactions to a specified Google Sheet using service account authentication.",
+        "operationId": "logDataToSheet",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SingleTransactionRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BulkTransactionRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged the transaction(s)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to write to sheet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/get-sheet-data": {
+      "post": {
+        "summary": "Get data from Google Sheets",
+        "description": "Retrieves data from a specified Google Sheet using service account authentication.",
+        "operationId": "getSheetData",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetDataRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved sheet data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetDataResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to read from sheet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/service-account": {
+      "get": {
+        "summary": "Get service account email",
+        "description": "Returns the email address of the service account being used.",
+        "operationId": "getServiceAccount",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved service account email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "serviceAccount": {
+                      "type": "string",
+                      "description": "Service account email address"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to get service account email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TransactionData": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Transaction date (YYYY-MM-DD)"
+          },
+          "time": {
+            "type": "string",
+            "description": "Transaction time (HH:mm:ss)"
+          },
+          "accountName": {
+            "type": "string",
+            "description": "Account name"
+          },
+          "transactionType": {
+            "type": "string",
+            "description": "Type of transaction"
+          },
+          "category": {
+            "type": "string",
+            "description": "Transaction category"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Transaction amount"
+          },
+          "establishment": {
+            "type": "string",
+            "description": "Establishment name"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of items"
+          },
+          "paymentMethod": {
+            "type": "string",
+            "description": "Method of payment"
+          },
+          "cardUsed": {
+            "type": "string",
+            "description": "Card used for payment"
+          },
+          "linkedBudgetCategory": {
+            "type": "string",
+            "description": "Linked budget category"
+          },
+          "onlineTransactionId": {
+            "type": "string",
+            "description": "Online transaction ID"
+          },
+          "mappedOnlineVendor": {
+            "type": "string",
+            "description": "Mapped online vendor"
+          },
+          "reimbursable": {
+            "type": "string",
+            "description": "Whether transaction is reimbursable"
+          },
+          "reimbursementStatus": {
+            "type": "string",
+            "description": "Status of reimbursement"
+          },
+          "interestType": {
+            "type": "string",
+            "description": "Type of interest"
+          },
+          "taxWithheld": {
+            "type": "number",
+            "description": "Tax withheld amount"
+          },
+          "taxDeductible": {
+            "type": "string",
+            "description": "Whether transaction is tax deductible"
+          },
+          "taxCategory": {
+            "type": "string",
+            "description": "Tax category"
+          },
+          "bankIdentifier": {
+            "type": "string",
+            "description": "Bank identifier"
+          },
+          "transactionMethod": {
+            "type": "string",
+            "description": "Method of transaction"
+          },
+          "transferMethod": {
+            "type": "string",
+            "description": "Method of transfer"
+          },
+          "referenceId": {
+            "type": "string",
+            "description": "Reference ID"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Additional notes"
+          },
+          "processed": {
+            "type": "string",
+            "description": "Processing status"
+          }
+        }
+      },
+      "SingleTransactionRequest": {
+        "type": "object",
+        "required": [
+          "spreadsheetId",
+          "sheetName",
+          "data"
+        ],
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Sheet to write to"
+          },
+          "sheetName": {
+            "type": "string",
+            "description": "The name of the sheet within the spreadsheet"
+          },
+          "data": {
+            "$ref": "#/components/schemas/TransactionData"
+          }
+        }
+      },
+      "BulkTransactionRequest": {
+        "type": "object",
+        "required": [
+          "spreadsheetId",
+          "sheetName",
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Sheet to write to"
+          },
+          "sheetName": {
+            "type": "string",
+            "description": "The name of the sheet within the spreadsheet"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["item", "amount"],
+              "properties": {
+                "item": {
+                  "type": "string",
+                  "description": "Item name"
+                },
+                "amount": {
+                  "type": "number",
+                  "description": "Item amount"
+                }
+              }
+            },
+            "description": "Array of items and their amounts"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/TransactionData"
+          }
+        }
+      },
+      "LogResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation was successful"
+          },
+          "message": {
+            "type": "string",
+            "description": "Success or error message"
+          },
+          "transactionId": {
+            "type": "string",
+            "description": "Generated transaction ID for single transactions"
+          },
+          "receiptId": {
+            "type": "string",
+            "description": "Generated receipt ID for bulk transactions"
+          },
+          "results": {
+            "type": "object",
+            "properties": {
+              "methods": {
+                "type": "object",
+                "properties": {
+                  "serviceAccount": {
+                    "type": "boolean"
+                  },
+                  "oauth": {
+                    "type": "boolean"
+                  },
+                  "queue": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "primaryMethod": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "GetDataRequest": {
+        "type": "object",
+        "required": [
+          "spreadsheetId",
+          "sheetName"
+        ],
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Sheet to read from"
+          },
+          "sheetName": {
+            "type": "string",
+            "description": "The name of the sheet within the spreadsheet"
+          }
+        }
+      },
+      "GetDataResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "description": "2D array of cell values with 29 columns",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 29,
+              "maxItems": 29
+            }
+          }
+        }
+      }
+    }
+  }
+} 

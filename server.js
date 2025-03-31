@@ -10,55 +10,115 @@ require("dotenv").config();
 // Express app setup
 const app = express();
 
-// Configure CORS
+// Configure CORS with specific options
 const corsOptions = {
-  origin: '*', // Allow all origins
+  origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  exposedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
-  preflightContinue: false
+  preflightContinue: false,
+  maxAge: 86400 // 24 hours
 };
 
+// Apply CORS middleware
 app.use(cors(corsOptions));
 app.use(express.json());
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 
 // Helper function to generate transaction IDs
 const generateTransactionId = (prefix = 'TXN') => {
   return `${prefix}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 };
 
-// Create service account client
+// Create service account client with explicit configuration
 let auth;
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
-  // For production: use JSON string from environment variable
   const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
   auth = new google.auth.GoogleAuth({
     credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    keyFile: null, // Explicitly set to null to prevent file-based auth
+    projectId: credentials.project_id
   });
 } else {
-  // For local development: use file path
   auth = new google.auth.GoogleAuth({
     keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    projectId: process.env.GOOGLE_CLOUD_PROJECT
   });
 }
 
-// Initialize sheets API
-const sheets = google.sheets({ version: 'v4', auth });
+// Initialize sheets API with explicit configuration
+const sheets = google.sheets({ 
+  version: 'v4', 
+  auth,
+  headers: {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json'
+  }
+});
 
-// Middleware to handle OPTIONS requests
-app.options('*', cors(corsOptions));
+// Middleware to ensure service account is authenticated
+const ensureServiceAccount = async (req, res, next) => {
+  try {
+    const client = await auth.getClient();
+    req.serviceAccount = client.email;
+    next();
+  } catch (error) {
+    console.error("Service account authentication error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Service account authentication failed",
+      results: {
+        methods: {
+          serviceAccount: false,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false
+      }
+    });
+  }
+};
+
+// Apply service account middleware to all routes
+app.use(ensureServiceAccount);
 
 // Get service account email
 app.get("/api/service-account", async (req, res) => {
   try {
-    const client = await auth.getClient();
-    const serviceAccount = client.email;
-    res.json({ serviceAccount });
+    res.json({ 
+      serviceAccount: req.serviceAccount,
+      success: true,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: true
+      }
+    });
   } catch (error) {
     console.error("Error getting service account:", error);
-    res.status(500).json({ error: "Failed to get service account email" });
+    res.status(500).json({ 
+      error: "Failed to get service account email",
+      success: false,
+      results: {
+        methods: {
+          serviceAccount: false,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false
+      }
+    });
   }
 });
 
@@ -258,7 +318,7 @@ app.post("/api/get-sheet-data", async (req, res) => {
       }
     });
   }
-  
+
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,

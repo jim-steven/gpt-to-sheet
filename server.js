@@ -10,14 +10,23 @@ require("dotenv").config();
 // Express app setup
 const app = express();
 
-// Middleware
-app.use(cors({
+// Configure CORS with specific options
+const corsOptions = {
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  exposedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  preflightContinue: false,
+  maxAge: 86400 // 24 hours
+};
+
+// Apply CORS middleware
+app.use(cors(corsOptions));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 
 // Helper function to generate transaction IDs
 const generateTransactionId = (prefix = 'TXN') => {
@@ -48,14 +57,49 @@ const getServiceAccountAuth = () => {
   }
 };
 
-// Get service account email
-app.get("/api/service-account", async (req, res) => {
+// Initialize sheets API with explicit configuration
+const sheets = google.sheets({ 
+  version: 'v4', 
+  auth: getServiceAccountAuth(),
+  headers: {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json'
+  }
+});
+
+// Middleware to ensure service account is authenticated
+const ensureServiceAccount = async (req, res, next) => {
   try {
     const auth = getServiceAccountAuth();
     await auth.authorize();
-    
+    req.serviceAccount = auth.email;
+    next();
+  } catch (error) {
+    console.error("Service account authentication error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Service account authentication failed",
+      results: {
+        methods: {
+          serviceAccount: false,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false
+      }
+    });
+  }
+};
+
+// Apply service account middleware to all routes
+app.use(ensureServiceAccount);
+
+// Get service account email
+app.get("/api/service-account", async (req, res) => {
+  try {
     res.json({ 
-      serviceAccount: auth.email,
+      serviceAccount: req.serviceAccount,
       success: true,
       results: {
         methods: {
@@ -106,13 +150,6 @@ app.post("/api/log-data-to-sheet", async (req, res) => {
   }
 
   try {
-    // Get service account auth
-    const auth = getServiceAccountAuth();
-    await auth.authorize();
-    
-    // Create sheets client
-    const sheets = google.sheets({ version: 'v4', auth });
-
     // Handle single transaction
     if (!Array.isArray(data)) {
       const transactionId = generateTransactionId();
@@ -290,13 +327,6 @@ app.post("/api/get-sheet-data", async (req, res) => {
   }
   
   try {
-    // Get service account auth
-    const auth = getServiceAccountAuth();
-    await auth.authorize();
-    
-    // Create sheets client
-    const sheets = google.sheets({ version: 'v4', auth });
-
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `${sheetName}!A:AC`
@@ -332,13 +362,6 @@ app.post("/api/set-sheet-headers", async (req, res) => {
   }
   
   try {
-    // Get service account auth
-    const auth = getServiceAccountAuth();
-    await auth.authorize();
-    
-    // Create sheets client
-    const sheets = google.sheets({ version: 'v4', auth });
-
     // Add headers
     const headers = [
       ["Transaction ID", "Date", "Time", "Account Name", "Transaction Type", "Category", "Allowances", "Deductions", "Items", "Establishment", "Receipt Number", "Amount", "Payment Method", "Card Used", "Linked Budget Category", "Online Transaction ID", "Mapped Online Vendor", "Reimbursable", "Reimbursement Status", "Interest Type", "Tax Withheld", "Tax Deductible", "Tax Category", "Bank Identifier", "Transaction Method", "Transfer Method", "Reference ID", "Notes", "Processed"]

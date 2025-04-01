@@ -168,38 +168,51 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
         ? `${receiptId}-ITEM-${index + 1}`
         : generateTransactionId('TXN');
 
+      // Create a mapping between input fields and header names
+      const fieldToHeaderMap = {
+        date: 'Date',
+        time: 'Time',
+        accountName: 'Account Name',
+        transactionType: 'Transaction Type',
+        category: 'Category',
+        allowances: 'Allowances',
+        deductions: 'Deductions',
+        items: 'Items',
+        establishment: 'Establishment',
+        receiptNumber: 'Receipt Number',
+        amount: 'Amount',
+        paymentMethod: 'Payment Method',
+        cardUsed: 'Card Used',
+        linkedBudgetCategory: 'Linked Budget Category',
+        onlineTransactionId: 'Online Transaction ID',
+        mappedOnlineVendor: 'Mapped Online Vendor',
+        reimbursable: 'Reimbursable',
+        reimbursementStatus: 'Reimbursement Status',
+        interestType: 'Interest Type',
+        taxWithheld: 'Tax Withheld',
+        taxDeductible: 'Tax Deductible',
+        taxCategory: 'Tax Category',
+        bankIdentifier: 'Bank Identifier',
+        transactionMethod: 'Transaction Method',
+        transferMethod: 'Transfer Method',
+        referenceId: 'Reference ID',
+        notes: 'Notes',
+        processed: 'Processed'
+      };
+
       // Map input fields to header names
       const mappedData = {
-        'Transaction ID': transactionId,
-        'Date': item.date || 'NA',
-        'Time': item.time || 'NA',
-        'Account Name': item.accountName || 'NA',
-        'Transaction Type': item.transactionType || 'NA',
-        'Category': item.category || 'NA',
-        'Allowances': item.allowances || 'NA',
-        'Deductions': item.deductions || 'NA',
-        'Items': item.items || 'NA',
-        'Establishment': item.establishment || 'NA',
-        'Receipt Number': item.receiptNumber || 'NA',
-        'Amount': typeof item.amount === 'number' ? item.amount : 0,
-        'Payment Method': item.paymentMethod || 'NA',
-        'Card Used': item.cardUsed || 'NA',
-        'Linked Budget Category': item.linkedBudgetCategory || 'NA',
-        'Online Transaction ID': item.onlineTransactionId || 'NA',
-        'Mapped Online Vendor': item.mappedOnlineVendor || 'NA',
-        'Reimbursable': item.reimbursable || 'NA',
-        'Reimbursement Status': item.reimbursementStatus || 'NA',
-        'Interest Type': item.interestType || 'NA',
-        'Tax Withheld': typeof item.taxWithheld === 'number' ? item.taxWithheld : 0,
-        'Tax Deductible': item.taxDeductible || 'NA',
-        'Tax Category': item.taxCategory || 'NA',
-        'Bank Identifier': item.bankIdentifier || 'NA',
-        'Transaction Method': item.transactionMethod || 'NA',
-        'Transfer Method': item.transferMethod || 'NA',
-        'Reference ID': item.referenceId || 'NA',
-        'Notes': item.notes || 'NA',
-        'Processed': item.processed || 'No'
+        'Transaction ID': transactionId
       };
+
+      // Map each field using the fieldToHeaderMap
+      Object.entries(fieldToHeaderMap).forEach(([field, header]) => {
+        if (header === 'Amount' || header === 'Tax Withheld') {
+          mappedData[header] = typeof item[field] === 'number' ? item[field] : 0;
+        } else {
+          mappedData[header] = item[field] || 'NA';
+        }
+      });
 
       // Return array in the same order as headers
       return headers.map(header => mappedData[header]);

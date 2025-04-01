@@ -168,48 +168,38 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
         ? `${receiptId}-ITEM-${index + 1}`
         : generateTransactionId('TXN');
 
-      // Create a default row with all 29 columns
-      const defaultRow = {
-        'Transaction ID': transactionId,
-        'Date': 'NA',
-        'Time': 'NA',
-        'Account Name': 'NA',
-        'Transaction Type': 'NA',
-        'Category': 'NA',
-        'Allowances': 'NA',
-        'Deductions': 'NA',
-        'Items': 'NA',
-        'Establishment': 'NA',
-        'Receipt Number': 'NA',
-        'Amount': 0,
-        'Payment Method': 'NA',
-        'Card Used': 'NA',
-        'Linked Budget Category': 'NA',
-        'Online Transaction ID': 'NA',
-        'Mapped Online Vendor': 'NA',
-        'Reimbursable': 'NA',
-        'Reimbursement Status': 'NA',
-        'Interest Type': 'NA',
-        'Tax Withheld': 0,
-        'Tax Deductible': 'NA',
-        'Tax Category': 'NA',
-        'Bank Identifier': 'NA',
-        'Transaction Method': 'NA',
-        'Transfer Method': 'NA',
-        'Reference ID': 'NA',
-        'Notes': 'NA',
-        'Processed': 'No'
-      };
-
-      // Update default row with provided data
-      Object.keys(item).forEach(key => {
-        if (key in defaultRow) {
-          defaultRow[key] = item[key] || 'NA';
-        }
-      });
-
-      // Map data to match header order exactly
-      return headers.map(header => defaultRow[header]);
+      // Map the data to match header order exactly
+      return [
+        transactionId,
+        item.date || 'NA',
+        item.time || 'NA',
+        item.accountName || 'NA',
+        item.transactionType || 'NA',
+        item.category || 'NA',
+        item.allowances || 'NA',
+        item.deductions || 'NA',
+        item.items || 'NA',
+        item.establishment || 'NA',
+        item.receiptNumber || 'NA',
+        item.amount || 0,
+        item.paymentMethod || 'NA',
+        item.cardUsed || 'NA',
+        item.linkedBudgetCategory || 'NA',
+        item.onlineTransactionId || 'NA',
+        item.mappedOnlineVendor || 'NA',
+        item.reimbursable || 'NA',
+        item.reimbursementStatus || 'NA',
+        item.interestType || 'NA',
+        item.taxWithheld || 0,
+        item.taxDeductible || 'NA',
+        item.taxCategory || 'NA',
+        item.bankIdentifier || 'NA',
+        item.transactionMethod || 'NA',
+        item.transferMethod || 'NA',
+        item.referenceId || 'NA',
+        item.notes || 'NA',
+        item.processed || 'No'
+      ];
     });
 
     console.log('Prepared rows for insertion:', rows);

@@ -171,38 +171,38 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
       // Map input fields to header names
       const mappedData = {
         'Transaction ID': transactionId,
-        'Date': item.date,
-        'Time': item.time,
-        'Account Name': item.accountName,
-        'Transaction Type': item.transactionType,
-        'Category': item.category,
-        'Allowances': item.allowances,
-        'Deductions': item.deductions,
-        'Items': item.items,
-        'Establishment': item.establishment,
-        'Receipt Number': item.receiptNumber,
-        'Amount': item.amount,
-        'Payment Method': item.paymentMethod,
-        'Card Used': item.cardUsed,
-        'Linked Budget Category': item.linkedBudgetCategory,
-        'Online Transaction ID': item.onlineTransactionId,
-        'Mapped Online Vendor': item.mappedOnlineVendor,
-        'Reimbursable': item.reimbursable,
-        'Reimbursement Status': item.reimbursementStatus,
-        'Interest Type': item.interestType,
-        'Tax Withheld': item.taxWithheld,
-        'Tax Deductible': item.taxDeductible,
-        'Tax Category': item.taxCategory,
-        'Bank Identifier': item.bankIdentifier,
-        'Transaction Method': item.transactionMethod,
-        'Transfer Method': item.transferMethod,
-        'Reference ID': item.referenceId,
-        'Notes': item.notes,
+        'Date': item.date || 'NA',
+        'Time': item.time || 'NA',
+        'Account Name': item.accountName || 'NA',
+        'Transaction Type': item.transactionType || 'NA',
+        'Category': item.category || 'NA',
+        'Allowances': item.allowances || 'NA',
+        'Deductions': item.deductions || 'NA',
+        'Items': item.items || 'NA',
+        'Establishment': item.establishment || 'NA',
+        'Receipt Number': item.receiptNumber || 'NA',
+        'Amount': typeof item.amount === 'number' ? item.amount : 0,
+        'Payment Method': item.paymentMethod || 'NA',
+        'Card Used': item.cardUsed || 'NA',
+        'Linked Budget Category': item.linkedBudgetCategory || 'NA',
+        'Online Transaction ID': item.onlineTransactionId || 'NA',
+        'Mapped Online Vendor': item.mappedOnlineVendor || 'NA',
+        'Reimbursable': item.reimbursable || 'NA',
+        'Reimbursement Status': item.reimbursementStatus || 'NA',
+        'Interest Type': item.interestType || 'NA',
+        'Tax Withheld': typeof item.taxWithheld === 'number' ? item.taxWithheld : 0,
+        'Tax Deductible': item.taxDeductible || 'NA',
+        'Tax Category': item.taxCategory || 'NA',
+        'Bank Identifier': item.bankIdentifier || 'NA',
+        'Transaction Method': item.transactionMethod || 'NA',
+        'Transfer Method': item.transferMethod || 'NA',
+        'Reference ID': item.referenceId || 'NA',
+        'Notes': item.notes || 'NA',
         'Processed': item.processed || 'No'
       };
 
-      // Return array in the same order as headers with NA for missing values
-      return headers.map(header => mappedData[header] || (header === 'Amount' || header === 'Tax Withheld' ? 0 : 'NA'));
+      // Return array in the same order as headers
+      return headers.map(header => mappedData[header]);
     });
 
     console.log('Prepared rows for insertion:', rows);

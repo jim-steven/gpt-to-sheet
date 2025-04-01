@@ -168,38 +168,41 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
         ? `${receiptId}-ITEM-${index + 1}`
         : generateTransactionId('TXN');
 
-      // Map the data to match header order exactly
-      return [
-        transactionId,
-        item.date || 'NA',
-        item.time || 'NA',
-        item.accountName || 'NA',
-        item.transactionType || 'NA',
-        item.category || 'NA',
-        item.allowances || 'NA',
-        item.deductions || 'NA',
-        item.items || 'NA',
-        item.establishment || 'NA',
-        item.receiptNumber || 'NA',
-        item.amount || 0,
-        item.paymentMethod || 'NA',
-        item.cardUsed || 'NA',
-        item.linkedBudgetCategory || 'NA',
-        item.onlineTransactionId || 'NA',
-        item.mappedOnlineVendor || 'NA',
-        item.reimbursable || 'NA',
-        item.reimbursementStatus || 'NA',
-        item.interestType || 'NA',
-        item.taxWithheld || 0,
-        item.taxDeductible || 'NA',
-        item.taxCategory || 'NA',
-        item.bankIdentifier || 'NA',
-        item.transactionMethod || 'NA',
-        item.transferMethod || 'NA',
-        item.referenceId || 'NA',
-        item.notes || 'NA',
-        item.processed || 'No'
-      ];
+      // Map input fields to header names
+      const mappedData = {
+        'Transaction ID': transactionId,
+        'Date': item.date,
+        'Time': item.time,
+        'Account Name': item.accountName,
+        'Transaction Type': item.transactionType,
+        'Category': item.category,
+        'Allowances': item.allowances,
+        'Deductions': item.deductions,
+        'Items': item.items,
+        'Establishment': item.establishment,
+        'Receipt Number': item.receiptNumber,
+        'Amount': item.amount,
+        'Payment Method': item.paymentMethod,
+        'Card Used': item.cardUsed,
+        'Linked Budget Category': item.linkedBudgetCategory,
+        'Online Transaction ID': item.onlineTransactionId,
+        'Mapped Online Vendor': item.mappedOnlineVendor,
+        'Reimbursable': item.reimbursable,
+        'Reimbursement Status': item.reimbursementStatus,
+        'Interest Type': item.interestType,
+        'Tax Withheld': item.taxWithheld,
+        'Tax Deductible': item.taxDeductible,
+        'Tax Category': item.taxCategory,
+        'Bank Identifier': item.bankIdentifier,
+        'Transaction Method': item.transactionMethod,
+        'Transfer Method': item.transferMethod,
+        'Reference ID': item.referenceId,
+        'Notes': item.notes,
+        'Processed': item.processed || 'No'
+      };
+
+      // Return array in the same order as headers with NA for missing values
+      return headers.map(header => mappedData[header] || (header === 'Amount' || header === 'Tax Withheld' ? 0 : 'NA'));
     });
 
     console.log('Prepared rows for insertion:', rows);

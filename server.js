@@ -168,55 +168,40 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
         ? `${receiptId}-ITEM-${index + 1}`
         : generateTransactionId('TXN');
 
-      // Create a mapping between input fields and header names
-      const fieldToHeaderMap = {
-        date: 'Date',
-        time: 'Time',
-        accountName: 'Account Name',
-        transactionType: 'Transaction Type',
-        category: 'Category',
-        allowances: 'Allowances',
-        deductions: 'Deductions',
-        items: 'Items',
-        establishment: 'Establishment',
-        receiptNumber: 'Receipt Number',
-        amount: 'Amount',
-        paymentMethod: 'Payment Method',
-        cardUsed: 'Card Used',
-        linkedBudgetCategory: 'Linked Budget Category',
-        onlineTransactionId: 'Online Transaction ID',
-        mappedOnlineVendor: 'Mapped Online Vendor',
-        reimbursable: 'Reimbursable',
-        reimbursementStatus: 'Reimbursement Status',
-        interestType: 'Interest Type',
-        taxWithheld: 'Tax Withheld',
-        taxDeductible: 'Tax Deductible',
-        taxCategory: 'Tax Category',
-        bankIdentifier: 'Bank Identifier',
-        transactionMethod: 'Transaction Method',
-        transferMethod: 'Transfer Method',
-        referenceId: 'Reference ID',
-        notes: 'Notes',
-        processed: 'Processed'
-      };
-
-      // Map input fields to header names
-      const mappedData = {
-        'Transaction ID': transactionId
-      };
-
-      // Map each field using the fieldToHeaderMap
-      for (const [field, header] of Object.entries(fieldToHeaderMap)) {
-        const value = item[field];
-        if (header === 'Amount' || header === 'Tax Withheld') {
-          mappedData[header] = typeof value === 'number' ? value : 0;
-        } else {
-          mappedData[header] = value || 'NA';
-        }
-      }
+      console.log('Processing item:', item); // Debug log
 
       // Return array in the same order as headers
-      return headers.map(header => mappedData[header]);
+      return [
+        transactionId,                    // Transaction ID
+        item.date || 'NA',               // Date
+        item.time || 'NA',               // Time
+        item.accountName || 'NA',        // Account Name
+        item.transactionType || 'NA',    // Transaction Type
+        item.category || 'NA',           // Category
+        item.allowances || 'NA',         // Allowances
+        item.deductions || 'NA',         // Deductions
+        item.items || 'NA',              // Items
+        item.establishment || 'NA',       // Establishment
+        item.receiptNumber || 'NA',      // Receipt Number
+        item.amount || 0,                // Amount
+        item.paymentMethod || 'NA',      // Payment Method
+        item.cardUsed || 'NA',           // Card Used
+        item.linkedBudgetCategory || 'NA', // Linked Budget Category
+        item.onlineTransactionId || 'NA', // Online Transaction ID
+        item.mappedOnlineVendor || 'NA', // Mapped Online Vendor
+        item.reimbursable || 'NA',       // Reimbursable
+        item.reimbursementStatus || 'NA', // Reimbursement Status
+        item.interestType || 'NA',       // Interest Type
+        item.taxWithheld || 0,           // Tax Withheld
+        item.taxDeductible || 'NA',      // Tax Deductible
+        item.taxCategory || 'NA',        // Tax Category
+        item.bankIdentifier || 'NA',     // Bank Identifier
+        item.transactionMethod || 'NA',  // Transaction Method
+        item.transferMethod || 'NA',     // Transfer Method
+        item.referenceId || 'NA',        // Reference ID
+        item.notes || 'NA',              // Notes
+        item.processed || 'No'           // Processed
+      ];
     });
 
     console.log('Prepared rows for insertion:', rows);

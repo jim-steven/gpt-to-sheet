@@ -206,13 +206,14 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
       };
 
       // Map each field using the fieldToHeaderMap
-      Object.entries(fieldToHeaderMap).forEach(([field, header]) => {
+      for (const [field, header] of Object.entries(fieldToHeaderMap)) {
+        const value = item[field];
         if (header === 'Amount' || header === 'Tax Withheld') {
-          mappedData[header] = typeof item[field] === 'number' ? item[field] : 0;
+          mappedData[header] = typeof value === 'number' ? value : 0;
         } else {
-          mappedData[header] = item[field] || 'NA';
+          mappedData[header] = value || 'NA';
         }
-      });
+      }
 
       // Return array in the same order as headers
       return headers.map(header => mappedData[header]);

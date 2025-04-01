@@ -40,15 +40,15 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["spreadsheetId", "sheetName"],
+                "required": ["data"],
                 "properties": {
                   "spreadsheetId": {
                     "type": "string",
-                    "description": "The ID of the Google Sheet to write to"
+                    "description": "The ID of the Google Sheet to write to (optional, defaults to configured sheet)"
                   },
                   "sheetName": {
                     "type": "string",
-                    "description": "The name of the sheet within the spreadsheet"
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Transactions')"
                   },
                   "data": {
                     "oneOf": [
@@ -58,25 +58,10 @@
                       {
                         "type": "array",
                         "items": {
-                          "type": "object",
-                          "required": ["item", "amount"],
-                          "properties": {
-                            "item": {
-                              "type": "string",
-                              "description": "Item name"
-                            },
-                            "amount": {
-                              "type": "number",
-                              "description": "Item amount",
-                              "format": "float"
-                            }
-                          }
+                          "$ref": "#/components/schemas/TransactionData"
                         }
                       }
                     ]
-                  },
-                  "meta": {
-                    "$ref": "#/components/schemas/TransactionData"
                   }
                 }
               }
@@ -129,15 +114,14 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["spreadsheetId", "sheetName"],
                 "properties": {
                   "spreadsheetId": {
                     "type": "string",
-                    "description": "The ID of the Google Sheet to read from"
+                    "description": "The ID of the Google Sheet to read from (optional, defaults to configured sheet)"
                   },
                   "sheetName": {
                     "type": "string",
-                    "description": "The name of the sheet within the spreadsheet"
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Transactions')"
                   }
                 }
               }
@@ -255,10 +239,9 @@
             "type": "string",
             "description": "Deductions"
           },
-          "amount": {
-            "type": "number",
-            "description": "Transaction amount",
-            "format": "float"
+          "items": {
+            "type": "string",
+            "description": "Items purchased"
           },
           "establishment": {
             "type": "string",
@@ -267,6 +250,11 @@
           "receiptNumber": {
             "type": "string",
             "description": "Receipt number"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Transaction amount",
+            "format": "float"
           },
           "paymentMethod": {
             "type": "string",
@@ -356,7 +344,7 @@
           },
           "receiptId": {
             "type": "string",
-            "description": "Generated receipt ID (format: REC-XXXX)"
+            "description": "Generated receipt ID (format: REC-XXXX) for bulk transactions"
           },
           "results": {
             "type": "object",
@@ -409,6 +397,9 @@
             "type": "boolean"
           },
           "message": {
+            "type": "string"
+          },
+          "error": {
             "type": "string"
           },
           "results": {

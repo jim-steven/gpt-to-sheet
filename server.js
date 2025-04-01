@@ -168,36 +168,36 @@ app.post('/api/log-data-to-sheet', async (req, res) => {
         ? `${receiptId}-ITEM-${index + 1}`
         : generateTransactionId('TXN');
 
-      // Map data to match header order exactly
+      // Map data to match header order exactly with NA for empty values
       return [
         transactionId,
-        item.date || '',
-        item.time || '',
-        item.accountName || '',
-        item.transactionType || '',
-        item.category || '',
-        item.allowances || '',
-        item.deductions || '',
-        item.items || '',
-        item.establishment || '',
-        item.receiptNumber || '',
+        item.date || 'NA',
+        item.time || 'NA',
+        item.accountName || 'NA',
+        item.transactionType || 'NA',
+        item.category || 'NA',
+        item.allowances || 'NA',
+        item.deductions || 'NA',
+        item.items || 'NA',
+        item.establishment || 'NA',
+        item.receiptNumber || 'NA',
         item.amount || 0,
-        item.paymentMethod || '',
-        item.cardUsed || '',
-        item.linkedBudgetCategory || '',
-        item.onlineTransactionId || '',
-        item.mappedOnlineVendor || '',
-        item.reimbursable || '',
-        item.reimbursementStatus || '',
-        item.interestType || '',
+        item.paymentMethod || 'NA',
+        item.cardUsed || 'NA',
+        item.linkedBudgetCategory || 'NA',
+        item.onlineTransactionId || 'NA',
+        item.mappedOnlineVendor || 'NA',
+        item.reimbursable || 'NA',
+        item.reimbursementStatus || 'NA',
+        item.interestType || 'NA',
         item.taxWithheld || 0,
-        item.taxDeductible || '',
-        item.taxCategory || '',
-        item.bankIdentifier || '',
-        item.transactionMethod || '',
-        item.transferMethod || '',
-        item.referenceId || '',
-        item.notes || '',
+        item.taxDeductible || 'NA',
+        item.taxCategory || 'NA',
+        item.bankIdentifier || 'NA',
+        item.transactionMethod || 'NA',
+        item.transferMethod || 'NA',
+        item.referenceId || 'NA',
+        item.notes || 'NA',
         item.processed || 'No'
       ];
     });
@@ -265,15 +265,24 @@ app.post('/api/get-sheet-data', async (req, res) => {
     const auth = getServiceAccountAuth();
     await auth.authorize();
     console.log('Service account authorized successfully');
-
+    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!A:AA`
+      range: `${sheetName}!A:AC`  // Updated to include all 29 columns
     });
-
+    
+    // Ensure all rows have exactly 29 columns
+    const data = (response.data.values || []).map(row => {
+      const paddedRow = [...row];
+      while (paddedRow.length < 29) {
+        paddedRow.push('NA');
+      }
+      return paddedRow.slice(0, 29);
+    });
+    
     console.log('Data retrieved successfully');
     res.json({
-      data: response.data.values || []
+      data: data
     });
   } catch (error) {
     console.error("Error getting sheet data:", error);

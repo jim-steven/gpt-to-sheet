@@ -3,6 +3,42 @@ const express = require("express");
 const { google } = require("googleapis");
 const cors = require("cors");
 const crypto = require('node:crypto');
+const { OAuth2Client } = require('google-auth-library');
+const { JWT } = require('google-auth-library');
+const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
+const { createClient } = require('@supabase/supabase-js');
+const { OpenAI } = require('openai');
+const { Configuration, OpenAIApi } = require('openai');
+const { GoogleAuth } = require('google-auth-library');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+const fs = require('fs').promises;
+const path = require('path');
+const { createHash } = require('crypto');
+const { createHmac } = require('crypto');
+const { createCipheriv, createDecipheriv, randomBytes } = require('crypto');
+const { createSign, createVerify } = require('crypto');
+const { createPublicKey, createPrivateKey } = require('crypto');
+const { generateKeyPairSync } = require('crypto');
+const { createECDH } = require('crypto');
+const { createDiffieHellman } = require('crypto');
+const { createDiffieHellmanGroup } = require('crypto');
+const { createHkdf } = require('crypto');
+const { createSecretKey } = require('crypto');
+const { createCipher, createDecipher } = require('crypto');
+const { createHash: createHashLegacy } = require('crypto');
+const { createHmac: createHmacLegacy } = require('crypto');
+const { createSign: createSignLegacy, createVerify: createVerifyLegacy } = require('crypto');
+const { createPublicKey: createPublicKeyLegacy, createPrivateKey: createPrivateKeyLegacy } = require('crypto');
+const { generateKeyPairSync: generateKeyPairSyncLegacy } = require('crypto');
+const { createECDH: createECDHLegacy } = require('crypto');
+const { createDiffieHellman: createDiffieHellmanLegacy } = require('crypto');
+const { createDiffieHellmanGroup: createDiffieHellmanGroupLegacy } = require('crypto');
+const { createHkdf: createHkdfLegacy } = require('crypto');
+const { createSecretKey: createSecretKeyLegacy } = require('crypto');
+const { createCipher: createCipherLegacy, createDecipher: createDecipherLegacy } = require('crypto');
 
 // Environment configuration
 require("dotenv").config();
@@ -23,11 +59,17 @@ const SHEET_NAMES = {
   status: 'Status'
 };
 
-// Configure CORS with specific options
+// Configure CORS
 const corsOptions = {
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: [
+    'https://gpt-to-sheet.onrender.com',
+    'http://localhost:3000',
+    'http://localhost:5000',
+    'https://sheets.googleapis.com'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 };
 
 // Apply CORS middleware
@@ -35,8 +77,17 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Handle preflight requests
+// Add preflight handler
 app.options('*', cors(corsOptions));
+
+// Add headers to all responses
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  next();
+});
 
 // Helper function to generate transaction IDs
 const generateTransactionId = (prefix = 'TXN') => {

@@ -4,7 +4,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "GPT-to-Sheet API",
-    "description": "API for logging financial transactions to Google Sheets using service account authentication.",
+    "description": "API for logging various types of data to Google Sheets using service account authentication.",
     "version": "2.0.0",
     "contact": {
       "name": "API Support",
@@ -23,17 +23,33 @@
       "description": "Transaction management endpoints"
     },
     {
+      "name": "workouts",
+      "description": "Workout tracking endpoints"
+    },
+    {
+      "name": "food",
+      "description": "Food logging endpoints"
+    },
+    {
+      "name": "journal",
+      "description": "Journal entry endpoints"
+    },
+    {
+      "name": "status",
+      "description": "Status tracking endpoints"
+    },
+    {
       "name": "sheets",
       "description": "Google Sheets operations"
     }
   ],
   "paths": {
-    "/api/log-data-to-sheet": {
+    "/api/log-transactions": {
       "post": {
         "tags": ["transactions"],
         "summary": "Log transaction to Google Sheets",
         "description": "Logs single or bulk transactions to a specified Google Sheet using service account authentication.",
-        "operationId": "logDataToSheet",
+        "operationId": "logTransactions",
         "requestBody": {
           "required": true,
           "content": {
@@ -71,6 +87,302 @@
         "responses": {
           "200": {
             "description": "Successfully logged the transaction(s)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to write to sheet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/log-workouts": {
+      "post": {
+        "tags": ["workouts"],
+        "summary": "Log workout to Google Sheets",
+        "description": "Logs single or bulk workouts to a specified Google Sheet using service account authentication.",
+        "operationId": "logWorkouts",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["data"],
+                "properties": {
+                  "spreadsheetId": {
+                    "type": "string",
+                    "description": "The ID of the Google Sheet to write to (optional, defaults to configured sheet)"
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Workouts')"
+                  },
+                  "data": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/WorkoutData"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/WorkoutData"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged the workout(s)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to write to sheet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/log-food": {
+      "post": {
+        "tags": ["food"],
+        "summary": "Log food to Google Sheets",
+        "description": "Logs single or bulk food entries to a specified Google Sheet using service account authentication.",
+        "operationId": "logFood",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["data"],
+                "properties": {
+                  "spreadsheetId": {
+                    "type": "string",
+                    "description": "The ID of the Google Sheet to write to (optional, defaults to configured sheet)"
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Food')"
+                  },
+                  "data": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/FoodData"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/FoodData"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged the food entry(ies)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to write to sheet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/log-journal": {
+      "post": {
+        "tags": ["journal"],
+        "summary": "Log journal entry to Google Sheets",
+        "description": "Logs single or bulk journal entries to a specified Google Sheet using service account authentication.",
+        "operationId": "logJournal",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["data"],
+                "properties": {
+                  "spreadsheetId": {
+                    "type": "string",
+                    "description": "The ID of the Google Sheet to write to (optional, defaults to configured sheet)"
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Journal')"
+                  },
+                  "data": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/JournalData"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/JournalData"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged the journal entry(ies)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to write to sheet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/log-status": {
+      "post": {
+        "tags": ["status"],
+        "summary": "Log status to Google Sheets",
+        "description": "Logs single or bulk status entries to a specified Google Sheet using service account authentication.",
+        "operationId": "logStatus",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["data"],
+                "properties": {
+                  "spreadsheetId": {
+                    "type": "string",
+                    "description": "The ID of the Google Sheet to write to (optional, defaults to configured sheet)"
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Status')"
+                  },
+                  "data": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/StatusData"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/StatusData"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged the status entry(ies)",
             "content": {
               "application/json": {
                 "schema": {
@@ -324,6 +636,175 @@
           "processed": {
             "type": "string",
             "description": "Processing status"
+          }
+        }
+      },
+      "WorkoutData": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Workout date (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "workoutType": {
+            "type": "string",
+            "description": "Type of workout (Push, Pull, Legs, Core, Mobility, Rest, etc.)"
+          },
+          "exercises": {
+            "type": "string",
+            "description": "List of exercises done"
+          },
+          "sets": {
+            "type": "string",
+            "description": "Number of sets (e.g. 3x)"
+          },
+          "reps": {
+            "type": "string",
+            "description": "Number of reps (e.g. 8-12 or actual reps)"
+          },
+          "progressionNotes": {
+            "type": "string",
+            "description": "Progression notes (e.g. 'Struggled on last set,' 'Moved to elevated push-ups')"
+          },
+          "duration": {
+            "type": "string",
+            "description": "Time / Duration (e.g. 45 min)"
+          },
+          "rpe": {
+            "type": "string",
+            "description": "Rate of Perceived Exertion (1-10 scale)"
+          },
+          "energyMood": {
+            "type": "string",
+            "description": "Energy / Mood (e.g. 'Tired,' 'Felt strong')"
+          },
+          "nextFocus": {
+            "type": "string",
+            "description": "Next Focus / Adjustment (e.g. 'Add reps next time,' 'Work on form')"
+          }
+        }
+      },
+      "FoodData": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Date (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "mealType": {
+            "type": "string",
+            "description": "Meal Type (Breakfast, Lunch, Dinner, Snack, Pre/Post-Workout)"
+          },
+          "timeEaten": {
+            "type": "string",
+            "description": "Time Eaten (e.g. 8:30 AM)",
+            "format": "time"
+          },
+          "foodDescription": {
+            "type": "string",
+            "description": "Food / Meal Description (e.g. Chicken rice bowl, banana, protein shake)"
+          },
+          "portionSize": {
+            "type": "string",
+            "description": "Portion / Serving Size (e.g. 1 cup, 100g)"
+          },
+          "calories": {
+            "type": "string",
+            "description": "Calories (Optional if tracking intake)"
+          },
+          "macros": {
+            "type": "string",
+            "description": "Macros (Protein / Carbs / Fat)"
+          },
+          "moodEnergy": {
+            "type": "string",
+            "description": "Mood / Energy After Eating (e.g. 'Felt full,' 'Still hungry,' 'Bloated')"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Notes (e.g. cravings, digestion, if you skipped or delayed a meal)"
+          }
+        }
+      },
+      "JournalData": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Date (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "whatHappened": {
+            "type": "string",
+            "description": "What happened?"
+          },
+          "whereDidISeeGod": {
+            "type": "string",
+            "description": "Where did I see God?"
+          },
+          "whatIsGodTeachingMe": {
+            "type": "string",
+            "description": "What is God teaching me?"
+          },
+          "howCanIRespondInFaith": {
+            "type": "string",
+            "description": "How can I respond in faith?"
+          },
+          "prayer": {
+            "type": "string",
+            "description": "Prayer / Conversation with God"
+          },
+          "scripture": {
+            "type": "string",
+            "description": "Scripture"
+          },
+          "gratitude": {
+            "type": "string",
+            "description": "Gratitude"
+          }
+        }
+      },
+      "StatusData": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Date (YYYY-MM-DD)",
+            "format": "date"
+          },
+          "timeBlock": {
+            "type": "string",
+            "description": "Time / Time Block (e.g. 9:00 AM-10:00 AM)"
+          },
+          "activity": {
+            "type": "string",
+            "description": "Activity / Task (What you were doing)"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category (Work, Rest, Social, Chores, Screen Time, Creative, Fitness, etc.)"
+          },
+          "location": {
+            "type": "string",
+            "description": "Location (Home, Gym, Café, Office, etc.)"
+          },
+          "mood": {
+            "type": "string",
+            "description": "Mood (Happy, Anxious, Focused, Tired, etc.)"
+          },
+          "energyLevel": {
+            "type": "string",
+            "description": "Energy Level (1-10)"
+          },
+          "focusLevel": {
+            "type": "string",
+            "description": "Focus Level (1-10)"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Notes / Observations (Any thoughts, distractions, interruptions, etc.)"
           }
         }
       },

@@ -18,8 +18,8 @@ const DEFAULT_SHEET_NAME = 'Transactions';
 const SHEET_NAMES = {
   transactions: 'Transactions',
   workouts: 'Workouts',
-  meals: 'Meals',
-  entries: 'Entries',
+  food: 'Food',
+  journal: 'Journal',
   status: 'Status'
 };
 
@@ -415,7 +415,7 @@ app.post('/api/log-workouts', async (req, res) => {
 // Add new endpoint for food logging
 app.post('/api/log-food', async (req, res) => {
   try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.meals, data } = req.body;
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.food, data } = req.body;
     if (!data) {
       return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
@@ -498,7 +498,7 @@ app.post('/api/log-food', async (req, res) => {
 // Add new endpoint for journal entries
 app.post('/api/log-journal', async (req, res) => {
   try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.entries, data } = req.body;
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.journal, data } = req.body;
     if (!data) {
       return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }

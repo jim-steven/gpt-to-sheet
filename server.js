@@ -660,6 +660,65 @@ app.post('/api/log-status', async (req, res) => {
   }
 });
 
+// Add new endpoint for setting headers
+app.post('/api/set-headers', async (req, res) => {
+  try {
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName, headers } = req.body;
+    if (!sheetName || !headers) {
+      return res.status(400).json({ success: false, message: 'Missing required parameters' });
+    }
+
+    const auth = await getServiceAccountAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // Clear existing data
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `${sheetName}!A:Z`
+    });
+
+    // Set new headers
+    const response = await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A1`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [headers]
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Headers set successfully',
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: true
+      }
+    });
+  } catch (error) {
+    console.error('Error setting headers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to set headers',
+      error: error.message,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: false
+      }
+    });
+  }
+});
+
 // Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

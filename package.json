@@ -17,6 +17,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "googleapis": "^118.0.0",
+    "openai": "^4.91.1",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

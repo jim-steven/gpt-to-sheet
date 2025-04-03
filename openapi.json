@@ -24,7 +24,7 @@
     },
     {
       "name": "workouts",
-      "description": "Workout tracking endpoints"
+      "description": "Workout logging endpoints"
     },
     {
       "name": "food",
@@ -36,7 +36,7 @@
     },
     {
       "name": "status",
-      "description": "Status tracking endpoints"
+      "description": "Status update endpoints"
     },
     {
       "name": "sheets",
@@ -212,7 +212,7 @@
                   },
                   "sheetName": {
                     "type": "string",
-                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Food')"
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Meals')"
                   },
                   "data": {
                     "oneOf": [
@@ -286,7 +286,7 @@
                   },
                   "sheetName": {
                     "type": "string",
-                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Journal')"
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Entries')"
                   },
                   "data": {
                     "oneOf": [
@@ -343,8 +343,8 @@
     "/api/log-status": {
       "post": {
         "tags": ["status"],
-        "summary": "Log status to Google Sheets",
-        "description": "Logs single or bulk status entries to a specified Google Sheet using service account authentication.",
+        "summary": "Log status update to Google Sheets",
+        "description": "Logs single or bulk status updates to a specified Google Sheet using service account authentication.",
         "operationId": "logStatus",
         "requestBody": {
           "required": true,
@@ -382,7 +382,7 @@
         },
         "responses": {
           "200": {
-            "description": "Successfully logged the status entry(ies)",
+            "description": "Successfully logged the status update(s)",
             "content": {
               "application/json": {
                 "schema": {
@@ -663,9 +663,9 @@
             "type": "string",
             "description": "Number of reps (e.g. 8-12 or actual reps)"
           },
-          "progressionNotes": {
+          "progression": {
             "type": "string",
-            "description": "Progression notes (e.g. 'Struggled on last set,' 'Moved to elevated push-ups')"
+            "description": "Progression notes (e.g. 'Struggled on last set', 'Moved to elevated push-ups')"
           },
           "duration": {
             "type": "string",
@@ -675,13 +675,13 @@
             "type": "string",
             "description": "Rate of Perceived Exertion (1-10 scale)"
           },
-          "energyMood": {
+          "energy": {
             "type": "string",
-            "description": "Energy / Mood (e.g. 'Tired,' 'Felt strong')"
+            "description": "Energy / Mood (e.g. 'Tired', 'Felt strong')"
           },
           "nextFocus": {
             "type": "string",
-            "description": "Next Focus / Adjustment (e.g. 'Add reps next time,' 'Work on form')"
+            "description": "Next focus / adjustment (e.g. 'Add reps next time', 'Work on form')"
           }
         }
       },
@@ -695,36 +695,36 @@
           },
           "mealType": {
             "type": "string",
-            "description": "Meal Type (Breakfast, Lunch, Dinner, Snack, Pre/Post-Workout)"
+            "description": "Type of meal (Breakfast, Lunch, Dinner, Snack, Pre/Post-Workout)"
           },
           "timeEaten": {
             "type": "string",
-            "description": "Time Eaten (e.g. 8:30 AM)",
+            "description": "Time eaten (e.g. 8:30 AM)",
             "format": "time"
           },
-          "foodDescription": {
+          "description": {
             "type": "string",
             "description": "Food / Meal Description (e.g. Chicken rice bowl, banana, protein shake)"
           },
-          "portionSize": {
+          "portion": {
             "type": "string",
             "description": "Portion / Serving Size (e.g. 1 cup, 100g)"
           },
           "calories": {
             "type": "string",
-            "description": "Calories (Optional if tracking intake)"
+            "description": "Calories (if tracking intake)"
           },
           "macros": {
             "type": "string",
             "description": "Macros (Protein / Carbs / Fat)"
           },
-          "moodEnergy": {
+          "mood": {
             "type": "string",
-            "description": "Mood / Energy After Eating (e.g. 'Felt full,' 'Still hungry,' 'Bloated')"
+            "description": "Mood / Energy After Eating (e.g. 'Felt full', 'Still hungry', 'Bloated')"
           },
           "notes": {
             "type": "string",
-            "description": "Notes (e.g. cravings, digestion, if you skipped or delayed a meal)"
+            "description": "Additional notes (e.g. cravings, digestion, if you skipped or delayed a meal)"
           }
         }
       },
@@ -740,15 +740,15 @@
             "type": "string",
             "description": "What happened?"
           },
-          "whereDidISeeGod": {
+          "whereGod": {
             "type": "string",
             "description": "Where did I see God?"
           },
-          "whatIsGodTeachingMe": {
+          "teaching": {
             "type": "string",
             "description": "What is God teaching me?"
           },
-          "howCanIRespondInFaith": {
+          "response": {
             "type": "string",
             "description": "How can I respond in faith?"
           },

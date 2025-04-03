@@ -18,7 +18,7 @@ const DEFAULT_SHEET_NAME = 'Transactions';
 const SHEET_NAMES = {
   transactions: 'Transactions',
   workouts: 'Workouts',
-  food: 'Food',
+  food: 'Meals',
   journal: 'Journal',
   status: 'Status'
 };
@@ -393,7 +393,7 @@ app.post('/api/log-workouts', async (req, res) => {
         success: true
       }
     });
-  } catch (error) {
+    } catch (error) {
     console.error('Error logging workout:', error);
     res.status(500).json({
       success: false,
@@ -453,7 +453,7 @@ app.post('/api/log-food', async (req, res) => {
     // Append data to sheet
     const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:H`,
+      range: `${sheetName}!A:I`,
       valueInputOption: 'RAW',
       requestBody: {
         values: values

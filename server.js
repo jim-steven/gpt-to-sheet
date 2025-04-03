@@ -14,12 +14,12 @@ const app = express();
 const DEFAULT_SPREADSHEET_ID = '1zlC8E46a3lD6z6jNglA5IrrNIQv_5pLhRF0T7fOPhXs';
 const DEFAULT_SHEET_NAME = 'Transactions';
 
-// Define sheet names for different types of logs
+// Define sheet names for different endpoints
 const SHEET_NAMES = {
   transactions: 'Transactions',
   workouts: 'Workouts',
-  food: 'Food',
-  journal: 'Journal',
+  meals: 'Meals',
+  entries: 'Entries',
   status: 'Status'
 };
 
@@ -114,11 +114,7 @@ app.post('/api/log-transactions', async (req, res) => {
   try {
     const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.transactions, data } = req.body;
     if (!data) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required parameters',
-        error: 'Data is required'
-      });
+      return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
     console.log(`Attempting to log data to spreadsheet: ${spreadsheetId}, sheet: ${sheetName}`);
@@ -311,20 +307,41 @@ app.post('/api/get-sheet-data', async (req, res) => {
   }
 });
 
-// Add new endpoint for logging workouts
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+// Root path route
+app.get('/', (req, res) => {
+  res.json({
+    message: "GPT to Sheet API",
+    endpoints: {
+      logData: "POST /api/log-transactions",
+      getSheetData: "POST /api/get-sheet-data",
+      serviceAccount: "GET /api/service-account"
+    },
+    defaults: {
+      spreadsheetId: DEFAULT_SPREADSHEET_ID,
+      sheetName: DEFAULT_SHEET_NAME
+    }
+  });
+});
+
+// Add new endpoint for workouts
 app.post('/api/log-workouts', async (req, res) => {
   try {
     const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.workouts, data } = req.body;
     if (!data) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required parameters',
-        error: 'Data is required'
-      });
+      return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
     const auth = await getServiceAccountAuth();
     const sheets = google.sheets({ version: 'v4', auth });
+
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const workoutId = Array.isArray(data) ? `REC-${generateTransactionId()}` : `TXN-${generateTransactionId()}`;
 
     // Define headers for workouts
     const headers = [
@@ -333,23 +350,25 @@ app.post('/api/log-workouts', async (req, res) => {
       'Energy / Mood', 'Next Focus / Adjustment'
     ];
 
-    // Convert data to array format
-    const dataArray = Array.isArray(data) ? data : [data];
-    const values = dataArray.map(item => [
-      item.date || 'NA',
-      item.workoutType || 'NA',
-      item.exercises || 'NA',
-      item.sets || 'NA',
-      item.reps || 'NA',
-      item.progressionNotes || 'NA',
-      item.duration || 'NA',
-      item.rpe || 'NA',
-      item.energyMood || 'NA',
-      item.nextFocus || 'NA'
-    ]);
+    // Map the data to match the headers
+    const values = dataArray.map(item => {
+      console.log('Processing workout:', item);
+      return [
+        item.date || 'NA',
+        item.workoutType || 'NA',
+        item.exercises || 'NA',
+        item.sets || 'NA',
+        item.reps || 'NA',
+        item.progression || 'NA',
+        item.duration || 'NA',
+        item.rpe || 'NA',
+        item.energy || 'NA',
+        item.nextFocus || 'NA'
+      ];
+    });
 
     // Append data to sheet
-    await sheets.spreadsheets.values.append({
+    const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${sheetName}!A:J`,
       valueInputOption: 'RAW',
@@ -358,9 +377,12 @@ app.post('/api/log-workouts', async (req, res) => {
       }
     });
 
+    console.log('Data appended successfully:', response.data);
+
     res.json({
       success: true,
       message: 'Workout logged successfully',
+      transactionId: workoutId,
       results: {
         methods: {
           serviceAccount: true,
@@ -390,55 +412,60 @@ app.post('/api/log-workouts', async (req, res) => {
   }
 });
 
-// Add new endpoint for logging food
+// Add new endpoint for food logging
 app.post('/api/log-food', async (req, res) => {
   try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.food, data } = req.body;
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.meals, data } = req.body;
     if (!data) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required parameters',
-        error: 'Data is required'
-      });
+      return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
     const auth = await getServiceAccountAuth();
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // Define headers for food
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const mealId = Array.isArray(data) ? `REC-${generateTransactionId()}` : `TXN-${generateTransactionId()}`;
+
+    // Define headers for meals
     const headers = [
       'Date', 'Meal Type', 'Time Eaten', 'Food / Meal Description',
       'Portion / Serving Size', 'Calories', 'Macros',
       'Mood / Energy After Eating', 'Notes'
     ];
 
-    // Convert data to array format
-    const dataArray = Array.isArray(data) ? data : [data];
-    const values = dataArray.map(item => [
-      item.date || 'NA',
-      item.mealType || 'NA',
-      item.timeEaten || 'NA',
-      item.foodDescription || 'NA',
-      item.portionSize || 'NA',
-      item.calories || 'NA',
-      item.macros || 'NA',
-      item.moodEnergy || 'NA',
-      item.notes || 'NA'
-    ]);
+    // Map the data to match the headers
+    const values = dataArray.map(item => {
+      console.log('Processing meal:', item);
+      return [
+        item.date || 'NA',
+        item.mealType || 'NA',
+        item.timeEaten || 'NA',
+        item.description || 'NA',
+        item.portion || 'NA',
+        item.calories || 'NA',
+        item.macros || 'NA',
+        item.mood || 'NA',
+        item.notes || 'NA'
+      ];
+    });
 
     // Append data to sheet
-    await sheets.spreadsheets.values.append({
+    const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:I`,
+      range: `${sheetName}!A:H`,
       valueInputOption: 'RAW',
       requestBody: {
         values: values
       }
     });
 
+    console.log('Data appended successfully:', response.data);
+
     res.json({
       success: true,
-      message: 'Food logged successfully',
+      message: 'Meal logged successfully',
+      transactionId: mealId,
       results: {
         methods: {
           serviceAccount: true,
@@ -450,10 +477,10 @@ app.post('/api/log-food', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error logging food:', error);
+    console.error('Error logging meal:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to log food',
+      message: 'Failed to log meal',
       error: error.message,
       results: {
         methods: {
@@ -468,54 +495,59 @@ app.post('/api/log-food', async (req, res) => {
   }
 });
 
-// Add new endpoint for logging journal
+// Add new endpoint for journal entries
 app.post('/api/log-journal', async (req, res) => {
   try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.journal, data } = req.body;
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.entries, data } = req.body;
     if (!data) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required parameters',
-        error: 'Data is required'
-      });
+      return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
     const auth = await getServiceAccountAuth();
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // Define headers for journal
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const entryId = Array.isArray(data) ? `REC-${generateTransactionId()}` : `TXN-${generateTransactionId()}`;
+
+    // Define headers for journal entries
     const headers = [
       'Date', 'What happened?', 'Where did I see God?',
       'What is God teaching me?', 'How can I respond in faith?',
       'Prayer / Conversation with God', 'Scripture', 'Gratitude'
     ];
 
-    // Convert data to array format
-    const dataArray = Array.isArray(data) ? data : [data];
-    const values = dataArray.map(item => [
-      item.date || 'NA',
-      item.whatHappened || 'NA',
-      item.whereDidISeeGod || 'NA',
-      item.whatIsGodTeachingMe || 'NA',
-      item.howCanIRespondInFaith || 'NA',
-      item.prayer || 'NA',
-      item.scripture || 'NA',
-      item.gratitude || 'NA'
-    ]);
+    // Map the data to match the headers
+    const values = dataArray.map(item => {
+      console.log('Processing journal entry:', item);
+      return [
+        item.date || 'NA',
+        item.whatHappened || 'NA',
+        item.whereGod || 'NA',
+        item.teaching || 'NA',
+        item.response || 'NA',
+        item.prayer || 'NA',
+        item.scripture || 'NA',
+        item.gratitude || 'NA'
+      ];
+    });
 
     // Append data to sheet
-    await sheets.spreadsheets.values.append({
+    const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:H`,
+      range: `${sheetName}!A:G`,
       valueInputOption: 'RAW',
       requestBody: {
         values: values
       }
     });
 
+    console.log('Data appended successfully:', response.data);
+
     res.json({
       success: true,
       message: 'Journal entry logged successfully',
+      transactionId: entryId,
       results: {
         methods: {
           serviceAccount: true,
@@ -527,7 +559,7 @@ app.post('/api/log-journal', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error logging journal:', error);
+    console.error('Error logging journal entry:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to log journal entry',
@@ -545,43 +577,46 @@ app.post('/api/log-journal', async (req, res) => {
   }
 });
 
-// Add new endpoint for logging status
+// Add new endpoint for status updates
 app.post('/api/log-status', async (req, res) => {
   try {
     const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.status, data } = req.body;
     if (!data) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required parameters',
-        error: 'Data is required'
-      });
+      return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
     const auth = await getServiceAccountAuth();
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // Define headers for status
-    const headers = [
-      'Date', 'Time / Time Block', 'Activity / Task', 'Category',
-      'Location', 'Mood', 'Energy Level', 'Focus Level', 'Notes / Observations'
-    ];
-
     // Convert data to array format
     const dataArray = Array.isArray(data) ? data : [data];
-    const values = dataArray.map(item => [
-      item.date || 'NA',
-      item.timeBlock || 'NA',
-      item.activity || 'NA',
-      item.category || 'NA',
-      item.location || 'NA',
-      item.mood || 'NA',
-      item.energyLevel || 'NA',
-      item.focusLevel || 'NA',
-      item.notes || 'NA'
-    ]);
+    const statusId = Array.isArray(data) ? `REC-${generateTransactionId()}` : `TXN-${generateTransactionId()}`;
+
+    // Define headers for status updates
+    const headers = [
+      'Date', 'Time / Time Block', 'Activity / Task',
+      'Category', 'Location', 'Mood', 'Energy Level',
+      'Focus Level', 'Notes / Observations'
+    ];
+
+    // Map the data to match the headers
+    const values = dataArray.map(item => {
+      console.log('Processing status update:', item);
+      return [
+        item.date || 'NA',
+        item.timeBlock || 'NA',
+        item.activity || 'NA',
+        item.category || 'NA',
+        item.location || 'NA',
+        item.mood || 'NA',
+        item.energyLevel || 'NA',
+        item.focusLevel || 'NA',
+        item.notes || 'NA'
+      ];
+    });
 
     // Append data to sheet
-    await sheets.spreadsheets.values.append({
+    const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${sheetName}!A:I`,
       valueInputOption: 'RAW',
@@ -590,9 +625,12 @@ app.post('/api/log-status', async (req, res) => {
       }
     });
 
+    console.log('Data appended successfully:', response.data);
+
     res.json({
       success: true,
-      message: 'Status logged successfully',
+      message: 'Status update logged successfully',
+      transactionId: statusId,
       results: {
         methods: {
           serviceAccount: true,
@@ -604,10 +642,10 @@ app.post('/api/log-status', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error logging status:', error);
+    console.error('Error logging status update:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to log status',
+      message: 'Failed to log status update',
       error: error.message,
       results: {
         methods: {
@@ -620,27 +658,6 @@ app.post('/api/log-status', async (req, res) => {
       }
     });
   }
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).send('OK');
-});
-
-// Root path route
-app.get('/', (req, res) => {
-  res.json({
-    message: "GPT to Sheet API",
-    endpoints: {
-      logData: "POST /api/log-data-to-sheet",
-      getSheetData: "POST /api/get-sheet-data",
-      serviceAccount: "GET /api/service-account"
-    },
-    defaults: {
-      spreadsheetId: DEFAULT_SPREADSHEET_ID,
-      sheetName: DEFAULT_SHEET_NAME
-    }
-  });
 });
 
 // Start the server

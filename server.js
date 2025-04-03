@@ -10,9 +10,18 @@ require("dotenv").config();
 // Express app setup
 const app = express();
 
-// Default configuration
+// Define default values
 const DEFAULT_SPREADSHEET_ID = '1zlC8E46a3lD6z6jNglA5IrrNIQv_5pLhRF0T7fOPhXs';
 const DEFAULT_SHEET_NAME = 'Transactions';
+
+// Define sheet names for different types of logs
+const SHEET_NAMES = {
+  transactions: 'Transactions',
+  workouts: 'Workouts',
+  food: 'Food',
+  journal: 'Journal',
+  status: 'Status'
+};
 
 // Configure CORS with specific options
 const corsOptions = {
@@ -100,24 +109,15 @@ app.get('/api/service-account', async (req, res) => {
   }
 });
 
-// Log data to sheet
-app.post('/api/log-data-to-sheet', async (req, res) => {
+// Rename the existing endpoint
+app.post('/api/log-transactions', async (req, res) => {
   try {
-    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = DEFAULT_SHEET_NAME, data } = req.body;
-
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.transactions, data } = req.body;
     if (!data) {
       return res.status(400).json({
         success: false,
-        message: "Missing required data parameter",
-        results: {
-          methods: {
-            serviceAccount: false,
-            oauth: false,
-            queue: false
-          },
-          primaryMethod: "serviceAccount",
-          success: false
-        }
+        message: 'Missing required parameters',
+        error: 'Data is required'
       });
     }
 
@@ -305,6 +305,317 @@ app.post('/api/get-sheet-data', async (req, res) => {
           queue: false
         },
         primaryMethod: "serviceAccount",
+        success: false
+      }
+    });
+  }
+});
+
+// Add new endpoint for logging workouts
+app.post('/api/log-workouts', async (req, res) => {
+  try {
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.workouts, data } = req.body;
+    if (!data) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required parameters',
+        error: 'Data is required'
+      });
+    }
+
+    const auth = await getServiceAccountAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // Define headers for workouts
+    const headers = [
+      'Date', 'Workout Type', 'Exercises', 'Sets', 'Reps', 
+      'Progression / Notes', 'Time / Duration', 'RPE', 
+      'Energy / Mood', 'Next Focus / Adjustment'
+    ];
+
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const values = dataArray.map(item => [
+      item.date || 'NA',
+      item.workoutType || 'NA',
+      item.exercises || 'NA',
+      item.sets || 'NA',
+      item.reps || 'NA',
+      item.progressionNotes || 'NA',
+      item.duration || 'NA',
+      item.rpe || 'NA',
+      item.energyMood || 'NA',
+      item.nextFocus || 'NA'
+    ]);
+
+    // Append data to sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${sheetName}!A:J`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: values
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Workout logged successfully',
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: true
+      }
+    });
+  } catch (error) {
+    console.error('Error logging workout:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to log workout',
+      error: error.message,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: false
+      }
+    });
+  }
+});
+
+// Add new endpoint for logging food
+app.post('/api/log-food', async (req, res) => {
+  try {
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.food, data } = req.body;
+    if (!data) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required parameters',
+        error: 'Data is required'
+      });
+    }
+
+    const auth = await getServiceAccountAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // Define headers for food
+    const headers = [
+      'Date', 'Meal Type', 'Time Eaten', 'Food / Meal Description',
+      'Portion / Serving Size', 'Calories', 'Macros',
+      'Mood / Energy After Eating', 'Notes'
+    ];
+
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const values = dataArray.map(item => [
+      item.date || 'NA',
+      item.mealType || 'NA',
+      item.timeEaten || 'NA',
+      item.foodDescription || 'NA',
+      item.portionSize || 'NA',
+      item.calories || 'NA',
+      item.macros || 'NA',
+      item.moodEnergy || 'NA',
+      item.notes || 'NA'
+    ]);
+
+    // Append data to sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${sheetName}!A:I`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: values
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Food logged successfully',
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: true
+      }
+    });
+  } catch (error) {
+    console.error('Error logging food:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to log food',
+      error: error.message,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: false
+      }
+    });
+  }
+});
+
+// Add new endpoint for logging journal
+app.post('/api/log-journal', async (req, res) => {
+  try {
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.journal, data } = req.body;
+    if (!data) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required parameters',
+        error: 'Data is required'
+      });
+    }
+
+    const auth = await getServiceAccountAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // Define headers for journal
+    const headers = [
+      'Date', 'What happened?', 'Where did I see God?',
+      'What is God teaching me?', 'How can I respond in faith?',
+      'Prayer / Conversation with God', 'Scripture', 'Gratitude'
+    ];
+
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const values = dataArray.map(item => [
+      item.date || 'NA',
+      item.whatHappened || 'NA',
+      item.whereDidISeeGod || 'NA',
+      item.whatIsGodTeachingMe || 'NA',
+      item.howCanIRespondInFaith || 'NA',
+      item.prayer || 'NA',
+      item.scripture || 'NA',
+      item.gratitude || 'NA'
+    ]);
+
+    // Append data to sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${sheetName}!A:H`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: values
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Journal entry logged successfully',
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: true
+      }
+    });
+  } catch (error) {
+    console.error('Error logging journal:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to log journal entry',
+      error: error.message,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: false
+      }
+    });
+  }
+});
+
+// Add new endpoint for logging status
+app.post('/api/log-status', async (req, res) => {
+  try {
+    const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.status, data } = req.body;
+    if (!data) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required parameters',
+        error: 'Data is required'
+      });
+    }
+
+    const auth = await getServiceAccountAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // Define headers for status
+    const headers = [
+      'Date', 'Time / Time Block', 'Activity / Task', 'Category',
+      'Location', 'Mood', 'Energy Level', 'Focus Level', 'Notes / Observations'
+    ];
+
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const values = dataArray.map(item => [
+      item.date || 'NA',
+      item.timeBlock || 'NA',
+      item.activity || 'NA',
+      item.category || 'NA',
+      item.location || 'NA',
+      item.mood || 'NA',
+      item.energyLevel || 'NA',
+      item.focusLevel || 'NA',
+      item.notes || 'NA'
+    ]);
+
+    // Append data to sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${sheetName}!A:I`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: values
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Status logged successfully',
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: true
+      }
+    });
+  } catch (error) {
+    console.error('Error logging status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to log status',
+      error: error.message,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
         success: false
       }
     });

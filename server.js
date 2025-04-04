@@ -56,8 +56,12 @@ const SHEET_NAMES = {
   workouts: 'Workouts',
   food: 'Meals',
   journal: 'Journal',
-  status: 'Status'
+  status: 'Status',
+  chat: 'Chat'  // Add chat sheet name
 };
+
+// Add backup spreadsheet ID
+const BACKUP_SPREADSHEET_ID = '1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4';
 
 // Enhanced CORS and security configuration
 const corsOptions = {
@@ -800,6 +804,105 @@ app.post('/api/set-headers', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to set headers',
+      error: error.message,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: false
+      }
+    });
+  }
+});
+
+// Add new endpoint for chat logging backup
+app.post('/api/log-chat-backup', async (req, res) => {
+  try {
+    const { data } = req.body;
+    if (!data) {
+      return res.status(400).json({ success: false, message: 'Missing required parameters' });
+    }
+
+    const auth = await getServiceAccountAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // Convert data to array format
+    const dataArray = Array.isArray(data) ? data : [data];
+    const chatId = Array.isArray(data) ? `CHAT-${generateTransactionId()}` : `CHAT-${generateTransactionId()}`;
+
+    // Define headers for chat logs
+    const headers = [
+      'Chat ID', 'Timestamp', 'Message Type', 'Message Content', 
+      'Source', 'Status', 'Notes'
+    ];
+
+    // First, check if headers exist
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: BACKUP_SPREADSHEET_ID,
+      range: `${SHEET_NAMES.chat}!A1:G1`
+    });
+
+    // If no headers exist or they don't match, set them
+    if (!headerResponse.data.values || headerResponse.data.values[0].join('\t') !== headers.join('\t')) {
+      console.log('Setting headers in chat sheet');
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: BACKUP_SPREADSHEET_ID,
+        range: `${SHEET_NAMES.chat}!A1:G1`,
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [headers]
+        }
+      });
+    }
+
+    // Map the data to match the headers
+    const values = dataArray.map(item => {
+      console.log('Processing chat message:', item);
+      return [
+        chatId,                                    // Chat ID
+        new Date().toISOString(),                 // Timestamp
+        item.type || 'message',                   // Message Type
+        item.content || item.message || 'NA',     // Message Content
+        item.source || 'user',                    // Source
+        item.status || 'logged',                  // Status
+        item.notes || 'Backup log entry'          // Notes
+      ];
+    });
+
+    // Append data to sheet
+    const response = await sheets.spreadsheets.values.append({
+      spreadsheetId: BACKUP_SPREADSHEET_ID,
+      range: `${SHEET_NAMES.chat}!A:G`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: values
+      }
+    });
+
+    console.log('Chat backup logged successfully:', response.data);
+
+    res.json({
+      success: true,
+      message: 'Chat backup logged successfully',
+      chatId: chatId,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: 'serviceAccount',
+        success: true
+      }
+    });
+  } catch (error) {
+    console.error('Error logging chat backup:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to log chat backup',
       error: error.message,
       results: {
         methods: {

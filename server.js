@@ -61,15 +61,12 @@ const SHEET_NAMES = {
 
 // Configure CORS
 const corsOptions = {
-  origin: [
-    'https://gpt-to-sheet.onrender.com',
-    'http://localhost:3000',
-    'http://localhost:5000',
-    'https://sheets.googleapis.com'
-  ],
+  origin: '*', // Allow all origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  credentials: true,
+  preflightContinue: true,
+  optionsSuccessStatus: 204
 };
 
 // Apply CORS middleware
@@ -77,15 +74,44 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Add preflight handler
-app.options('*', cors(corsOptions));
+// Remove preflight handler since we're allowing all origins
+// app.options('*', cors(corsOptions));
 
-// Add headers to all responses
+// Simplified headers middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Credentials', 'true');
+  next();
+});
+
+// Add notification middleware
+app.use((req, res, next) => {
+  // Log message detection for POST requests
+  if (req.method === 'POST') {
+    console.log('📨 Message Detected:', {
+      endpoint: req.path,
+      timestamp: new Date().toISOString(),
+      body: req.body
+    });
+  }
+  next();
+});
+
+// Modify the response middleware to include notifications
+app.use((req, res, next) => {
+  const originalJson = res.json;
+  res.json = function(data) {
+    // Add notification for successful sheet updates
+    if (data.success && req.method === 'POST' && req.path.includes('/api/log-')) {
+      console.log('📝 Message sent to sheet:', {
+        endpoint: req.path,
+        timestamp: new Date().toISOString(),
+        transactionId: data.transactionId
+      });
+    }
+    return originalJson.call(this, data);
+  };
   next();
 });
 

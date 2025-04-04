@@ -41,6 +41,10 @@
     {
       "name": "sheets",
       "description": "Google Sheets operations"
+    },
+    {
+      "name": "chat",
+      "description": "Chat logging endpoints"
     }
   ],
   "paths": {
@@ -514,6 +518,80 @@
           }
         }
       }
+    },
+    "/api/log-chat-backup": {
+      "post": {
+        "tags": ["chat"],
+        "summary": "Log chat messages to Google Sheets",
+        "description": "Logs single or bulk chat messages to a specified Google Sheet using service account authentication.",
+        "operationId": "logChatBackup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["data"],
+                "properties": {
+                  "spreadsheetId": {
+                    "type": "string",
+                    "description": "The ID of the Google Sheet to write to (optional, defaults to configured sheet)"
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "The name of the sheet within the spreadsheet (optional, defaults to 'Chat')"
+                  },
+                  "data": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/ChatData"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/ChatData"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully logged the chat message(s)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to write to sheet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -909,6 +987,33 @@
             }
           }
         }
+      },
+      "ChatData": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The chat message content"
+          },
+          "type": {
+            "type": "string",
+            "description": "Type of message (e.g., 'user_message', 'assistant_message', etc.)"
+          },
+          "source": {
+            "type": "string",
+            "description": "Source of the message (e.g., 'user', 'assistant', 'system')"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "Timestamp of the message (ISO format)",
+            "format": "date-time"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Additional notes or context"
+          }
+        },
+        "required": ["message"]
       }
     }
   }

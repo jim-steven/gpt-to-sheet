@@ -61,14 +61,14 @@ const SHEET_NAMES = {
 
 // Enhanced CORS and security configuration
 const corsOptions = {
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
-  exposedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false, // Changed to false to prevent credential prompts
+  origin: true, // Allow all origins without prompting
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'],
+  allowedHeaders: ['*'], // Allow all headers
+  exposedHeaders: ['*'],
+  credentials: false,
   preflightContinue: false,
-  optionsSuccessStatus: 204,
-  maxAge: 3600
+  optionsSuccessStatus: 200,
+  maxAge: 86400
 };
 
 app.use(cors(corsOptions));
@@ -77,25 +77,23 @@ app.use(express.urlencoded({ extended: true }));
 
 // Enhanced security headers middleware
 app.use((req, res, next) => {
-  // CORS headers
+  // CORS headers - most permissive configuration
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  res.header('Access-Control-Max-Age', '3600');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH');
+  res.header('Access-Control-Allow-Headers', '*');
+  res.header('Access-Control-Max-Age', '86400');
   res.header('Access-Control-Allow-Credentials', 'false');
   
-  // Security headers
+  // Security headers - relaxed for API access
   res.header('X-Content-Type-Options', 'nosniff');
-  res.header('X-Frame-Options', 'DENY');
-  res.header('X-XSS-Protection', '1; mode=block');
-  res.header('Referrer-Policy', 'no-referrer');
-  res.header('Cross-Origin-Opener-Policy', 'same-origin');
+  res.header('X-Frame-Options', 'ALLOWALL');
   res.header('Cross-Origin-Resource-Policy', 'cross-origin');
-  res.header('Cross-Origin-Embedder-Policy', 'require-corp');
+  res.removeHeader('X-Powered-By');
   
-  // Handle preflight requests
+  // Handle preflight requests immediately
   if (req.method === 'OPTIONS') {
-    return res.status(204).end();
+    res.status(200).end();
+    return;
   }
   
   next();
@@ -107,14 +105,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Add notification middleware
+// Add notification middleware with less verbose logging
 app.use((req, res, next) => {
-  // Log message detection for POST requests
   if (req.method === 'POST') {
     console.log('📨 Message Detected:', {
       endpoint: req.path,
-      timestamp: new Date().toISOString(),
-      body: req.body
+      timestamp: new Date().toISOString()
     });
   }
   next();

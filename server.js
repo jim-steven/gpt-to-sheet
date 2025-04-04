@@ -64,18 +64,29 @@ const SHEET_NAMES = {
 const BACKUP_SPREADSHEET_ID = '1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4';
 
 // Enhanced CORS and security configuration
-const corsOptions = {
-  origin: true, // Allow all origins without prompting
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'],
-  allowedHeaders: ['*'], // Allow all headers
-  exposedHeaders: ['*'],
+app.use(cors({
+  origin: true,
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE', 'HEAD'],
+  allowedHeaders: '*',
+  exposedHeaders: '*',
   credentials: false,
-  preflightContinue: false,
+  maxAge: 86400,
   optionsSuccessStatus: 200,
-  maxAge: 86400
-};
+  preflightContinue: false
+}));
 
-app.use(cors(corsOptions));
+// Add permissive security headers
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 'notifications=*, geolocation=*');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Credentials', 'false');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

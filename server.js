@@ -59,29 +59,51 @@ const SHEET_NAMES = {
   status: 'Status'
 };
 
-// Configure CORS
+// Enhanced CORS and security configuration
 const corsOptions = {
-  origin: '*', // Allow all origins
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  preflightContinue: true,
-  optionsSuccessStatus: 204
+  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
+  exposedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false, // Changed to false to prevent credential prompts
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
+  maxAge: 3600
 };
 
-// Apply CORS middleware
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Remove preflight handler since we're allowing all origins
-// app.options('*', cors(corsOptions));
-
-// Simplified headers middleware
+// Enhanced security headers middleware
 app.use((req, res, next) => {
+  // CORS headers
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Max-Age', '3600');
+  res.header('Access-Control-Allow-Credentials', 'false');
+  
+  // Security headers
+  res.header('X-Content-Type-Options', 'nosniff');
+  res.header('X-Frame-Options', 'DENY');
+  res.header('X-XSS-Protection', '1; mode=block');
+  res.header('Referrer-Policy', 'no-referrer');
+  res.header('Cross-Origin-Opener-Policy', 'same-origin');
+  res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.header('Cross-Origin-Embedder-Policy', 'require-corp');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  
+  next();
+});
+
+// Remove any authentication requirements for endpoints
+app.use((req, res, next) => {
+  // Skip authentication checks
   next();
 });
 

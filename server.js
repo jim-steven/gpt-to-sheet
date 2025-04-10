@@ -63,27 +63,42 @@ const SHEET_NAMES = {
 // Add backup spreadsheet ID
 const BACKUP_SPREADSHEET_ID = '1m6e-HTb1W_trKMKgkkM-ItcuwJJW-Ab6lM_TKmOAee4';
 
-// Enhanced CORS and security configuration
+// Enhanced CORS and security configuration for maximum compatibility
 app.use(cors({
-  origin: true,
+  origin: '*', // Most permissive setting
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE', 'HEAD'],
   allowedHeaders: '*',
   exposedHeaders: '*',
-  credentials: false,
+  credentials: true, // Allow credentials to support all client types
   maxAge: 86400,
-  optionsSuccessStatus: 200,
+  optionsSuccessStatus: 204, // Better for mobile
   preflightContinue: false
 }));
 
-// Add permissive security headers
+// Add permissive security headers optimized for mobile
 app.use((req, res, next) => {
+  // Log the user agent to help diagnose issues
+  console.log(`Request from: ${req.headers['user-agent']}`);
+  
+  // Set permissive headers for maximum compatibility
   res.setHeader('Permissions-Policy', 'notifications=*, geolocation=*');
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none'); // Most permissive
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none'); // Most permissive
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Credentials', 'false');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Keep-Alive', 'timeout=120');
+  
+  // Handle OPTIONS requests for mobile clients
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  
   next();
 });
 
@@ -154,11 +169,14 @@ const generateTransactionId = (prefix = 'TXN') => {
 };
 
 // Error logging helper
-const logErrorDetails = (error, context = '') => {
+const logErrorDetails = (error, context = '', req = null) => {
+  // Include user agent in error logs if available
+  const userAgent = req ? req.headers['user-agent'] : 'Not available';
   console.error(`Error in ${context}:`, {
     message: error.message,
     code: error.code,
     status: error.status,
+    userAgent,
     details: error.response?.data || 'No response data',
     stack: error.stack?.split('\n').slice(0, 3).join('\n') || 'No stack trace'
   });
@@ -996,12 +1014,14 @@ app.use((err, req, res, next) => {
   res.status(statusCode).json(errorResponse);
 });
 
-// Start the server
+// Start the server with mobile-friendly connection settings
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Handle server timeouts
-server.timeout = 60000; // 60 second timeout
+// Handle server timeouts - increase for mobile clients
+server.timeout = 120000; // 120 second timeout for mobile clients
+server.keepAliveTimeout = 65000; // Keep-alive timeout
+server.headersTimeout = 66000; // Headers timeout must be > keepAliveTimeout
 

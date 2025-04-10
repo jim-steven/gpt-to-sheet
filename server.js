@@ -150,11 +150,23 @@ app.use((req, res, next) => {
 
 // Helper function to generate transaction IDs
 const generateTransactionId = (prefix = 'TXN') => {
-  return `${prefix}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 5)}`;
 };
 
-// Initialize service account auth
-const getServiceAccountAuth = () => {
+// Error logging helper
+const logErrorDetails = (error, context = '') => {
+  console.error(`Error in ${context}:`, {
+    message: error.message,
+    code: error.code,
+    status: error.status,
+    details: error.response?.data || 'No response data',
+    stack: error.stack?.split('\n').slice(0, 3).join('\n') || 'No stack trace'
+  });
+  return error;
+};
+
+// Initialize service account auth with timeout handling
+const getServiceAccountAuth = async () => {
   try {
     // Get credentials from environment variable
     const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
@@ -177,17 +189,24 @@ const getServiceAccountAuth = () => {
   }
 };
 
-// Initialize sheets API
-const sheets = google.sheets({ 
-  version: 'v4', 
-  auth: getServiceAccountAuth()
-});
+// Initialize sheets API with timeout handling - use async function to properly handle auth
+let sheetsApi;
+const getSheets = async () => {
+  if (!sheetsApi) {
+    const auth = await getServiceAccountAuth();
+    sheetsApi = google.sheets({ 
+      version: 'v4', 
+      auth,
+      timeout: 30000 // 30 second timeout for API requests
+    });
+  }
+  return sheetsApi;
+};
 
 // Get service account email
 app.get('/api/service-account', async (req, res) => {
   try {
-    const auth = getServiceAccountAuth();
-    await auth.authorize();
+    const auth = await getServiceAccountAuth();
     res.json({
       serviceAccount: auth.email,
       success: true,
@@ -222,13 +241,14 @@ app.get('/api/service-account', async (req, res) => {
 // Rename the existing endpoint
 app.post('/api/log-transactions', async (req, res) => {
   try {
+    const sheets = await getSheets();
     const { spreadsheetId = DEFAULT_SPREADSHEET_ID, sheetName = SHEET_NAMES.transactions, data } = req.body;
     if (!data) {
       return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
     console.log(`Attempting to log data to spreadsheet: ${spreadsheetId}, sheet: ${sheetName}`);
-    const auth = getServiceAccountAuth();
+    const auth = await getServiceAccountAuth();
     await auth.authorize();
     console.log('Service account authorized successfully');
 
@@ -243,11 +263,21 @@ app.post('/api/log-transactions', async (req, res) => {
       'Transfer Method', 'Reference ID', 'Notes', 'Processed'
     ];
 
-    // First, check if headers exist
-    const headerResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${sheetName}!A1:AC1`
-    });
+    // First, check if headers exist with timeout handling
+    let headerResponse;
+    try {
+      const sheets = await getSheets();
+      headerResponse = await Promise.race([
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${sheetName}!A1:AC1`
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout checking headers')), 15000))
+      ]);
+    } catch (error) {
+      logErrorDetails(error, 'checking spreadsheet headers');
+      throw new Error(`Failed to check spreadsheet headers: ${error.message}`);
+    }
 
     // If no headers exist or they don't match, set them
     if (!headerResponse.data.values || headerResponse.data.values[0].join('\t') !== headers.join('\t')) {
@@ -312,15 +342,25 @@ app.post('/api/log-transactions', async (req, res) => {
 
     console.log('Prepared rows for insertion:', rows);
     
-    // Append data to sheet
-    const response = await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${sheetName}!A:AC`,
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: rows
-      }
-    });
+    // Append data to sheet with timeout handling
+    let response;
+    try {
+      const sheets = await getSheets();
+      response = await Promise.race([
+        sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${sheetName}!A:AC`,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: rows
+          }
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout appending data')), 20000))
+      ]);
+    } catch (error) {
+      logErrorDetails(error, 'appending data to spreadsheet');
+      throw new Error(`Failed to append data to spreadsheet: ${error.message}`);
+    }
 
     console.log('Data appended successfully:', response.data);
 
@@ -837,8 +877,7 @@ app.post('/api/log-chat-backup', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
-    const auth = await getServiceAccountAuth();
-    const sheets = google.sheets({ version: 'v4', auth });
+    const sheets = await getSheets();
 
     // Convert data to array format
     const dataArray = Array.isArray(data) ? data : [data];
@@ -928,9 +967,41 @@ app.post('/api/log-chat-backup', async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Handle 404 - add this before the error handler
+app.use((req, res, next) => {
+  res.status(404).json({
+    success: false,
+    message: 'Endpoint not found',
+    path: req.path
+  });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  const statusCode = err.statusCode || 500;
+  console.error('Unhandled error:', err);
+  
+  // Don't expose stack trace in production
+  const errorResponse = {
+    success: false,
+    message: err.message || 'Internal Server Error',
+    error: process.env.NODE_ENV === 'production' ? {} : err
+  };
+  
+  res.status(statusCode).json(errorResponse);
+});
+
 // Start the server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Handle server timeouts
+server.timeout = 60000; // 60 second timeout
 

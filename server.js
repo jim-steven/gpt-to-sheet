@@ -1025,3 +1025,107 @@ server.timeout = 120000; // 120 second timeout for mobile clients
 server.keepAliveTimeout = 65000; // Keep-alive timeout
 server.headersTimeout = 66000; // Headers timeout must be > keepAliveTimeout
 
+// Add new endpoint for automatic chat logging
+app.post('/api/log-chat', async (req, res) => {
+  try {
+    const { message, sender } = req.body;
+    if (!message || !sender) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required parameters. Please provide message and sender.'
+      });
+    }
+
+    const sheets = await getSheets();
+    const timestamp = new Date().toISOString();
+
+    // Define headers for chat logs (simple 3-column format)
+    const headers = ['Timestamp', 'Sender', 'Message'];
+
+    // First, check if headers exist
+    try {
+      const headerResponse = await Promise.race([
+        sheets.spreadsheets.values.get({
+          spreadsheetId: DEFAULT_SPREADSHEET_ID,
+          range: `${SHEET_NAMES.chat}!A1:C1`
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout checking headers')), 15000))
+      ]);
+
+      // If no headers exist or they don't match, set them
+      if (!headerResponse.data.values || headerResponse.data.values[0].join('\t') !== headers.join('\t')) {
+        console.log('Setting headers in chat sheet');
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: DEFAULT_SPREADSHEET_ID,
+          range: `${SHEET_NAMES.chat}!A1:C1`,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: [headers]
+          }
+        });
+      }
+    } catch (error) {
+      // If the sheet doesn't exist yet, we'll create it by appending data
+      console.log('Chat sheet may not exist yet, will create it with data');
+    }
+
+    // Prepare the chat message row
+    const row = [
+      timestamp,               // Timestamp
+      sender,                  // Sender (me/gpt)
+      message                  // Message content
+    ];
+
+    // Append data to sheet
+    try {
+      const response = await Promise.race([
+        sheets.spreadsheets.values.append({
+          spreadsheetId: DEFAULT_SPREADSHEET_ID,
+          range: `${SHEET_NAMES.chat}!A:C`,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: [row]
+          }
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout appending data')), 20000))
+      ]);
+
+      console.log('Chat message logged successfully:', response.data);
+
+      res.json({
+        success: true,
+        message: 'Chat message logged successfully',
+        timestamp: timestamp,
+        results: {
+          methods: {
+            serviceAccount: true,
+            oauth: false,
+            queue: false
+          },
+          primaryMethod: "serviceAccount",
+          success: true
+        }
+      });
+    } catch (error) {
+      logErrorDetails(error, 'logging chat message', req);
+      throw new Error(`Failed to log chat message: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('Error logging chat message:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to log chat message',
+      error: error.message,
+      results: {
+        methods: {
+          serviceAccount: true,
+          oauth: false,
+          queue: false
+        },
+        primaryMethod: "serviceAccount",
+        success: false
+      }
+    });
+  }
+});
+
